@@ -35,6 +35,13 @@ that creates the thing it governs.
   install by removing the check.
 - A fresh load of the guest page reaches no origin but its own. No remote font,
   script, image, analytics or beacon, and a browser is what says so.
+- A dependency a check needs from outside this repository is probed for
+  explicitly, before the check runs, and its absence is reported as a skip that
+  names it. A `try`/`catch` around the work is not a probe: it cannot tell a
+  dependency that is not there from one that is there and broken.
+- A browser assertion reads state and compares it. It does not wait for the
+  state it expects: a wait that expires reports a timeout, which is what a dead
+  server produces too, and names neither.
 
 ## Change size
 
@@ -109,6 +116,16 @@ not ahead of it.
 | `docker compose up -d` | PostgreSQL and Redis. |
 
 `pnpm verify` reports `PASS`, `FAIL` or `SKIP` for each check. A `SKIP` means
-the check had nothing to evaluate — commonly that the commit it would inspect
-does not exist yet — and it says so on the line. Pass `--require-history` to
-turn those skips into failures; CI does this by default.
+the check had nothing to evaluate, and it says so on the line. There are two
+reasons a check has nothing to evaluate, and they convert under different
+flags:
+
+- The commit it would inspect does not exist yet. Pass `--require-history` to
+  turn those skips into failures; CI does this by default.
+- The dependency it needs is not on this machine. `test-api` needs PostgreSQL
+  and `test-guest` needs PostgreSQL and Chromium, each probed for before it
+  runs. Pass `--require-environment` to turn those skips into failures; CI
+  passes it explicitly, because CI provisions both. Rationale:
+  `docs/adr/0011-skip-a-check-whose-environment-is-absent.md`.
+
+An unrecognised argument is rejected rather than ignored.

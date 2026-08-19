@@ -59,6 +59,12 @@ jobs:
       - run: pnpm --filter @table-ordering/guest exec playwright install --with-deps chromium
 
       # CI is a clean tree with the commit already made, so every convention
-      # check has something to evaluate. A skip here is a failure: `verify`
+      # check has something to evaluate. A skip there is a failure: `verify`
       # treats the CI environment variable the same as --require-history.
-      - run: pnpm verify
+      #
+      # The flag is the other half, and it is written out rather than inferred
+      # from CI. This job provisions a database in `services:` and a browser in
+      # the step above; --require-environment is what makes the run demand both,
+      # so a skip of either fails here instead of quietly reporting success for
+      # suites nobody ran. A job that provisioned neither would not pass it.
+      - run: pnpm verify --require-environment

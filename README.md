@@ -194,14 +194,23 @@ the commit message check active without any manual setup step. Installing with
 `--ignore-scripts` skips it, and the hook then does nothing.
 
 `pnpm verify` reports `PASS`, `FAIL` or `SKIP` per check. A `SKIP` means the
-check had nothing to evaluate — commonly a convention check whose commit does
-not exist yet — and it says so on its own line. CI runs on a clean tree with
-the commit already made, so nothing skips there.
+check had nothing to evaluate, and it says so on its own line — either because
+the commit it would inspect does not exist yet, or because the dependency it
+needs is not on this machine.
 
-`pnpm verify` needs the database and the browser running the checks above: the
-menu test talks to a real PostgreSQL, and the guest page's test builds the
-client and loads it in Chromium. Both fail, rather than skipping, when what they
-need is not there.
+Two of the checks need something this repository does not contain. `test-api`
+talks to a real PostgreSQL. `test-guest` builds the client, serves it and loads
+it in Chromium. Each is probed for before it runs, so a clone with no Docker
+gets
+
+```
+test-api ......... SKIP  nothing is listening at 127.0.0.1:55432
+```
+
+rather than a failure that reads as though the code is broken. The tool suites
+have no such dependency and run either way. Pass `--require-environment` to turn
+those skips into failures — CI does, because CI provisions both, and a skip
+there would mean the provisioning silently stopped working.
 
 `docker compose up -d` also starts Redis. Nothing connects to it yet, and it
 publishes no host port.
@@ -221,6 +230,7 @@ each with the alternatives that were rejected and why.
 - [0008 Version the schema as plain SQL migrations](docs/adr/0008-version-the-schema-as-plain-sql-migrations.md)
 - [0009 Render the guest page in the browser](docs/adr/0009-render-the-guest-page-in-the-browser.md)
 - [0010 Observe the guest page in a real browser](docs/adr/0010-observe-the-guest-page-in-a-real-browser.md)
+- [0011 Report a check whose environment is absent as a skip](docs/adr/0011-skip-a-check-whose-environment-is-absent.md)
 
 ## Known limitations
 
@@ -237,9 +247,11 @@ each with the alternatives that were rejected and why.
   run steps above show. There is no admin route and no seed.
 - Nothing records which migrations a database has had applied. That is fine for
   one migration, and it is why the second one needs a runner first.
-- `pnpm verify` needs PostgreSQL and a Chromium build. Both tests fail rather
-  than skip when what they need is missing: a test that skips itself on an
-  absent dependency reports success for a system nobody exercised.
+- The database probe is a TCP connect. It answers whether something is
+  accepting connections at the address the tests use, not whether that
+  something is PostgreSQL, so a wrong service on the port fails the suites
+  rather than skipping them. That is deliberate — a misconfiguration is not an
+  absent dependency — but it does mean the skip is keyed on absence alone.
 - CI downloads that browser on every run. Caching it is the obvious next move
   and has not been made.
 - The convention checker carries four rules. The rest arrive with the code they
