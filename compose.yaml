@@ -2,9 +2,14 @@
 # credentials and are inline on purpose: a fresh clone must come up with
 # `docker compose up -d` and no environment file to fill in first.
 #
-# No host ports are published yet. Nothing in this repository connects to
-# either service, so a published port would only contend with whatever the
-# developer already runs locally. Ports arrive with the first client.
+# Postgres now has a client -- the API service and its tests -- so it publishes
+# a host port. Not 5432: a developer working on this is likely to have their
+# own Postgres already holding it, and a compose file that cannot come up
+# beside one is a compose file nobody runs. The port is a literal because the
+# API's default connection string carries the same number; a variable here
+# would move one of the two and leave the other behind.
+#
+# Redis still publishes nothing, because nothing connects to it yet.
 name: table-ordering
 
 services:
@@ -15,6 +20,8 @@ services:
       POSTGRES_USER: table_ordering
       POSTGRES_PASSWORD: table_ordering_dev
       POSTGRES_DB: table_ordering
+    ports:
+      - '55432:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:

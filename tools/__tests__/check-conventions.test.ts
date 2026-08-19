@@ -7,7 +7,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -16,8 +16,10 @@ import {
   collectInput,
   commitMessagePolicyRule,
   createRules,
+  featureHasTestRule,
   formatReports,
   hasFailure,
+  migrationHasDownRule,
   type Rule,
   readmeStatusDateRule,
   runRules,
@@ -31,6 +33,15 @@ function input(overrides: Partial<ConventionInput> = {}): ConventionInput {
     readmeCommitDates: ['2026-08-19'],
     readmeDirty: false,
     commitMessages: ['set up toolchain and ci\n\nNo application code yet.'],
+    migrations: [
+      { path: 'services/api/migrations/0001-create-menu.up.sql', down: 'drop table menu_item;\n' },
+    ],
+    features: [
+      {
+        path: 'services/api/src/features/menu',
+        files: ['menu.test.ts', 'routes.ts', 'sql.ts'],
+      },
+    ],
     allowedIdentity: IDENTITY,
     requireHistory: false,
     ...overrides,
@@ -188,25 +199,31 @@ describe('the vacuity contract', () => {
 // ---------------------------------------------------------------------------
 
 describe('the report', () => {
-  it('summarises the bootstrap run as two skips', () => {
+  // The two history-dependent fields are both derived from git's unborn state,
+  // so they are null together or not at all, and an unborn repository's README
+  // is untracked rather than modified. The file rules read the working tree, so
+  // they evaluate before the first commit.
+  it('summarises a repository with no commits as two skips and two passes', () => {
     const reports = runRules(
-      createRules(input({ commitMessages: null, readmeCommitDates: null, readmeDirty: true })),
+      createRules(input({ commitMessages: null, readmeCommitDates: null, readmeDirty: false })),
     )
     const text = formatReports(reports)
-    expect(text).toContain('2 checks: 0 PASS, 0 FAIL, 2 SKIP')
+    expect(text).toContain('4 checks: 2 PASS, 0 FAIL, 2 SKIP')
     expect(text).toContain('readme-status-date')
     expect(text).toContain('commit-message-policy')
     expect(hasFailure(reports)).toBe(false)
   })
 
-  it('summarises a clean committed tree as two passes', () => {
+  it('summarises a clean committed tree as four passes', () => {
     const reports = runRules(createRules(input({ requireHistory: true })))
-    expect(formatReports(reports)).toContain('2 checks: 2 PASS, 0 FAIL, 0 SKIP')
+    expect(formatReports(reports)).toContain('4 checks: 4 PASS, 0 FAIL, 0 SKIP')
     expect(hasFailure(reports)).toBe(false)
   })
 
   it('prints a reason beside every skip', () => {
-    const reports = runRules(createRules(input({ commitMessages: null, readmeDirty: true })))
+    const reports = runRules(
+      createRules(input({ commitMessages: null, readmeCommitDates: null, readmeDirty: false })),
+    )
     for (const line of formatReports(reports).split('\n')) {
       if (!line.includes('SKIP')) continue
       if (line.includes('checks:')) continue
@@ -214,10 +231,12 @@ describe('the report', () => {
     }
   })
 
-  it('ships exactly the two rules', () => {
+  it('ships exactly the four rules', () => {
     expect(createRules(input()).map((rule) => rule.name)).toEqual([
       'readme-status-date',
       'commit-message-policy',
+      'migration-has-down',
+      'feature-has-test',
     ])
   })
 })
@@ -346,9 +365,15 @@ describe('collectInput', () => {
   it('passes --require-history through to the rules', () => {
     const dir = newRepo()
     expect(collectInput(dir, true).requireHistory).toBe(true)
-    expect(runRules(createRules(collectInput(dir, true))).every((r) => r.verdict === 'FAIL')).toBe(
-      true,
+
+    // Named rather than counted: the two file rules also fail on this empty
+    // repository, but they fail as vacuous, which would let this assertion go
+    // on passing for a reason that has nothing to do with --require-history.
+    const verdicts = new Map(
+      runRules(createRules(collectInput(dir, true))).map((report) => [report.name, report.verdict]),
     )
+    expect(verdicts.get('readme-status-date')).toBe('FAIL')
+    expect(verdicts.get('commit-message-policy')).toBe('FAIL')
   })
 })
 
@@ -362,9 +387,15 @@ describe('collectInput', () => {
  * supposed to be strictest. These cases drive the real repository shape.
  */
 describe('an unborn repository whose README.md is untracked', () => {
+  /** A fresh clone before its first commit: files on disk, nothing in history. */
   function bootstrapRepo(): string {
     const dir = newRepo()
     writeFileSync(join(dir, 'README.md'), '# Title\n\n**Status:** 2026-08-19 · x.\n', 'utf8')
+    mkdirSync(join(dir, 'services', 'api', 'migrations'), { recursive: true })
+    writeFileSync(join(dir, 'services', 'api', 'migrations', '1.up.sql'), 'create table x ();\n')
+    writeFileSync(join(dir, 'services', 'api', 'migrations', '1.down.sql'), 'drop table x;\n')
+    mkdirSync(join(dir, 'services', 'api', 'src', 'features', 'menu'), { recursive: true })
+    writeFileSync(join(dir, 'services', 'api', 'src', 'features', 'menu', 'menu.test.ts'), '')
     return dir
   }
 
@@ -374,9 +405,9 @@ describe('an unborn repository whose README.md is untracked', () => {
     expect(collected.readmeDirty).toBe(false)
   })
 
-  it('skips both checks, and names missing history as the reason', () => {
+  it('skips the two history checks, and names missing history as the reason', () => {
     const reports = runRules(createRules(collectInput(bootstrapRepo(), false)))
-    expect(reports.map((report) => report.verdict)).toEqual(['SKIP', 'SKIP'])
+    expect(reports.map((report) => report.verdict)).toEqual(['SKIP', 'SKIP', 'PASS', 'PASS'])
     const readme = reports[0]?.outcome
     expect(readme?.status).toBe('skip')
     if (readme?.status === 'skip') {
@@ -384,8 +415,114 @@ describe('an unborn repository whose README.md is untracked', () => {
     }
   })
 
-  it('fails both checks under --require-history', () => {
+  it('fails the two history checks under --require-history', () => {
     const reports = runRules(createRules(collectInput(bootstrapRepo(), true)))
-    expect(reports.map((report) => report.verdict)).toEqual(['FAIL', 'FAIL'])
+    expect(reports.map((report) => report.verdict)).toEqual(['FAIL', 'FAIL', 'PASS', 'PASS'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Both file rules are driven through `collectInput` against real directories,
+ * never through a hand-built input. A rule about files that is only ever shown
+ * an object literal is a rule about object literals: it would keep agreeing
+ * with a selector that reads the wrong path, or one that reads nothing at all.
+ */
+describe('migration-has-down', () => {
+  function repoWithMigrations(files: Record<string, string>): ConventionInput {
+    const dir = newRepo()
+    mkdirSync(join(dir, 'services', 'api', 'migrations'), { recursive: true })
+    for (const [name, text] of Object.entries(files)) {
+      writeFileSync(join(dir, 'services', 'api', 'migrations', name), text, 'utf8')
+    }
+    return collectInput(dir, false)
+  }
+
+  it('passes an up migration whose down sibling says something', () => {
+    const collected = repoWithMigrations({
+      '0001-create-menu.up.sql': 'create table menu_item ();\n',
+      '0001-create-menu.down.sql': 'drop table menu_item;\n',
+    })
+    expect(migrationHasDownRule(collected).check()).toEqual({ status: 'pass', subjects: 1 })
+  })
+
+  it('counts the pair as one subject, not two', () => {
+    const collected = repoWithMigrations({
+      '0001-create-menu.up.sql': 'create table menu_item ();\n',
+      '0001-create-menu.down.sql': 'drop table menu_item;\n',
+      '0002-add-currency.up.sql': 'alter table menu_item add column currency char(3);\n',
+      '0002-add-currency.down.sql': 'alter table menu_item drop column currency;\n',
+    })
+    expect(migrationHasDownRule(collected).check()).toEqual({ status: 'pass', subjects: 2 })
+  })
+
+  it('fails an up migration with no down sibling', () => {
+    const collected = repoWithMigrations({ '0001-create-menu.up.sql': 'create table x ();\n' })
+    const outcome = migrationHasDownRule(collected).check()
+
+    expect(outcome.status).toBe('fail')
+    if (outcome.status === 'fail') {
+      expect(outcome.violations).toEqual([
+        {
+          where: 'services/api/migrations/0001-create-menu.up.sql',
+          detail: 'no sibling .down.sql',
+        },
+      ])
+    }
+  })
+
+  it('fails an up migration whose down sibling is blank', () => {
+    const collected = repoWithMigrations({
+      '0001-create-menu.up.sql': 'create table x ();\n',
+      '0001-create-menu.down.sql': '\n\n',
+    })
+    const outcome = migrationHasDownRule(collected).check()
+
+    expect(outcome.status).toBe('fail')
+    if (outcome.status === 'fail') {
+      expect(outcome.violations[0]?.detail).toBe('its .down.sql is empty')
+    }
+  })
+
+  it('fails as vacuous when no service carries a migration', () => {
+    const report = runRules([migrationHasDownRule(collectInput(newRepo(), false))])[0]
+    expect(report?.verdict).toBe('FAIL')
+    expect(report?.vacuous).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('feature-has-test', () => {
+  function repoWithFeature(name: string, files: readonly string[]): ConventionInput {
+    const dir = newRepo()
+    const feature = join(dir, 'services', 'api', 'src', 'features', name)
+    mkdirSync(feature, { recursive: true })
+    for (const file of files) writeFileSync(join(feature, file), '', 'utf8')
+    return collectInput(dir, false)
+  }
+
+  it('passes a feature directory that holds a test beside its code', () => {
+    const collected = repoWithFeature('menu', ['routes.ts', 'sql.ts', 'menu.test.ts'])
+    expect(featureHasTestRule(collected).check()).toEqual({ status: 'pass', subjects: 1 })
+  })
+
+  it('fails a feature directory that holds only code', () => {
+    const collected = repoWithFeature('menu', ['routes.ts', 'sql.ts'])
+    const outcome = featureHasTestRule(collected).check()
+
+    expect(outcome.status).toBe('fail')
+    if (outcome.status === 'fail') {
+      expect(outcome.violations).toEqual([
+        { where: 'services/api/src/features/menu', detail: 'holds no *.test.ts file' },
+      ])
+    }
+  })
+
+  it('fails as vacuous when no service has a feature directory', () => {
+    const report = runRules([featureHasTestRule(collectInput(newRepo(), false))])[0]
+    expect(report?.verdict).toBe('FAIL')
+    expect(report?.vacuous).toBe(true)
   })
 })

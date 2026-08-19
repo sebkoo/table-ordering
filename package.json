@@ -14,7 +14,8 @@
     "conventions": "node --disable-warning=ExperimentalWarning tools/check-conventions.ts",
     "typecheck": "tsc --noEmit -p tsconfig.base.json",
     "lint": "biome check .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev": "pnpm --filter @table-ordering/api dev"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.9",

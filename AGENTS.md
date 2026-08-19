@@ -23,7 +23,16 @@ submission are separate problems and are treated separately.
 ## Invariants
 
 Technical invariants are recorded here one line at a time, each in the commit
-that creates the thing it governs. There are none yet.
+that creates the thing it governs.
+
+- Money is an integer count of the currency's minor unit, carried with its ISO
+  4217 code. Never a float, never a decimal string, in the schema or on the
+  wire.
+- A restaurant's rows are read only through a query scoped to that restaurant.
+  Row-level security is not in place, so the scope is the query's job.
+- A release too new for pnpm's minimum release age is pinned back to an older
+  release. The exclusion list is not used, because an exclusion satisfies the
+  install by removing the check.
 
 ## Change size
 

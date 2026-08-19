@@ -18,7 +18,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { type Dirent, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { commitMessageViolations } from './commit-message.ts'
@@ -38,6 +38,20 @@ export type Rule = {
   /** true: an outcome reporting zero subjects is a FAILURE, not a pass */
   expectsSubjects: boolean
   check(): Outcome
+}
+
+export type Migration = {
+  /** Repository-relative path of the up migration. */
+  path: string
+  /** Contents of the sibling down migration, or null when there is no sibling. */
+  down: string | null
+}
+
+export type Feature = {
+  /** Repository-relative path of the feature directory. */
+  path: string
+  /** Names of the files directly inside it. */
+  files: string[]
 }
 
 export type ConventionInput = {
@@ -60,6 +74,15 @@ export type ConventionInput = {
    * git's unborn state, never from an empty log.
    */
   commitMessages: string[] | null
+  /**
+   * Every `*.up.sql` under `services/<service>/migrations`, in path order,
+   * each carrying the text of its `*.down.sql` sibling or null when it has
+   * none. The text comes along because "the sibling exists" and "the sibling
+   * says something" are different questions and the rule asks both.
+   */
+  migrations: Migration[]
+  /** Every directory under `services/<service>/src/features`, in path order. */
+  features: Feature[]
   /** The email address a Signed-off-by trailer must carry. */
   allowedIdentity: string
   /** Treat "no history to evaluate" as a failure rather than a skip. */
@@ -170,8 +193,72 @@ export function commitMessagePolicyRule(input: ConventionInput): Rule {
   }
 }
 
+/**
+ * A schema change that cannot be undone is a deployment with no way back, and
+ * the moment to write the undo is while the change is still fresh: the author
+ * knows what the up migration created, and nobody yet depends on the data it
+ * would drop.
+ *
+ * Up and down are separate files rather than two sections of one, so that
+ * applying a migration by hand is `psql < ...up.sql` with nothing to strip
+ * first. A marker inside a single file would have to be parsed identically by
+ * this rule, by the test that applies it, and by whoever types the command.
+ */
+export function migrationHasDownRule(input: ConventionInput): Rule {
+  return {
+    name: 'migration-has-down',
+    expectsSubjects: true,
+    check(): Outcome {
+      const violations: Violation[] = []
+
+      for (const migration of input.migrations) {
+        if (migration.down === null) {
+          violations.push({ where: migration.path, detail: 'no sibling .down.sql' })
+        } else if (migration.down.trim() === '') {
+          violations.push({ where: migration.path, detail: 'its .down.sql is empty' })
+        }
+      }
+
+      const subjects = input.migrations.length
+      if (violations.length > 0) return { status: 'fail', subjects, violations }
+      return { status: 'pass', subjects }
+    },
+  }
+}
+
+/**
+ * A feature directory is a vertical slice, and a slice arrives with the check
+ * that says it works. Nothing here judges what the test asserts; the rule
+ * catches the case where a slice landed with no executable acceptance
+ * condition at all, which is the one a reader cannot detect by looking.
+ */
+export function featureHasTestRule(input: ConventionInput): Rule {
+  return {
+    name: 'feature-has-test',
+    expectsSubjects: true,
+    check(): Outcome {
+      const violations: Violation[] = []
+
+      for (const feature of input.features) {
+        if (!feature.files.some((file) => file.endsWith('.test.ts'))) {
+          violations.push({ where: feature.path, detail: 'holds no *.test.ts file' })
+        }
+      }
+
+      const subjects = input.features.length
+      if (violations.length > 0) return { status: 'fail', subjects, violations }
+      return { status: 'pass', subjects }
+    },
+  }
+}
+
 export function createRules(input: ConventionInput): Rule[] {
-  return [readmeStatusDateRule(input), commitMessagePolicyRule(input)]
+  return [
+    readmeStatusDateRule(input),
+    commitMessagePolicyRule(input),
+    migrationHasDownRule(input),
+    featureHasTestRule(input),
+  ]
 }
 
 export type Verdict = 'PASS' | 'FAIL' | 'SKIP'
@@ -281,6 +368,66 @@ function readCommitMessages(root: string): string[] {
   return records.map((message) => message.trim())
 }
 
+/**
+ * Directory entries, or none when the directory does not exist. A missing
+ * directory is not an error here: it means the rule that selects from it has
+ * no subjects, and the vacuity contract is what decides whether that is
+ * acceptable -- not this function, which only reports what is on disk.
+ */
+function entriesIn(path: string): Dirent[] {
+  try {
+    return readdirSync(path, { withFileTypes: true })
+  } catch {
+    return []
+  }
+}
+
+function names(path: string, kind: 'file' | 'directory'): string[] {
+  return entriesIn(path)
+    .filter((entry) => (kind === 'file' ? entry.isFile() : entry.isDirectory()))
+    .map((entry) => entry.name)
+    .sort()
+}
+
+const UP_SUFFIX = '.up.sql'
+
+function readMigrations(root: string): Migration[] {
+  const migrations: Migration[] = []
+
+  for (const service of names(join(root, 'services'), 'directory')) {
+    const directory = join(root, 'services', service, 'migrations')
+    for (const file of names(directory, 'file')) {
+      if (!file.endsWith(UP_SUFFIX)) continue
+      const sibling = `${file.slice(0, -UP_SUFFIX.length)}.down.sql`
+      let down: string | null
+      try {
+        down = readFileSync(join(directory, sibling), 'utf8')
+      } catch {
+        down = null
+      }
+      migrations.push({ path: `services/${service}/migrations/${file}`, down })
+    }
+  }
+
+  return migrations
+}
+
+function readFeatures(root: string): Feature[] {
+  const features: Feature[] = []
+
+  for (const service of names(join(root, 'services'), 'directory')) {
+    const directory = join(root, 'services', service, 'src', 'features')
+    for (const feature of names(directory, 'directory')) {
+      features.push({
+        path: `services/${service}/src/features/${feature}`,
+        files: names(join(directory, feature), 'file'),
+      })
+    }
+  }
+
+  return features
+}
+
 export function collectInput(root: string, requireHistory: boolean): ConventionInput {
   let readme: string | null
   try {
@@ -325,6 +472,8 @@ export function collectInput(root: string, requireHistory: boolean): ConventionI
     readmeCommitDates,
     readmeDirty,
     commitMessages,
+    migrations: readMigrations(root),
+    features: readFeatures(root),
     allowedIdentity: (gitOrNull(root, ['config', '--get', 'user.email']) ?? '').trim(),
     requireHistory,
   }

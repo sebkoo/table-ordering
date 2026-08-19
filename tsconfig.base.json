@@ -20,5 +20,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["tools/**/*.ts", "vitest.config.ts"]
+  "include": ["tools/**/*.ts", "services/*/src/**/*.ts", "vitest.config.ts"]
 }

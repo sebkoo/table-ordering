@@ -16,6 +16,26 @@ jobs:
   verify:
     name: verify
     runs-on: ubuntu-latest
+
+    # The menu test talks to a real database. The published port matches the
+    # one in compose.yaml, which is also the default in the connection string,
+    # so the port is written down in one place and CI needs no extra
+    # environment to find it.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: table_ordering
+          POSTGRES_PASSWORD: table_ordering_dev
+          POSTGRES_DB: table_ordering
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U table_ordering -d table_ordering"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
     steps:
       - uses: actions/checkout@v5
         with:
