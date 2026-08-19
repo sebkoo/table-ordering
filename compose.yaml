@@ -1,0 +1,40 @@
+# Development dependencies only. The credentials below are development
+# credentials and are inline on purpose: a fresh clone must come up with
+# `docker compose up -d` and no environment file to fill in first.
+#
+# No host ports are published yet. Nothing in this repository connects to
+# either service, so a published port would only contend with whatever the
+# developer already runs locally. Ports arrive with the first client.
+name: table-ordering
+
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: table_ordering
+      POSTGRES_PASSWORD: table_ordering_dev
+      POSTGRES_DB: table_ordering
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U table_ordering -d table_ordering']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:8
+    restart: unless-stopped
+    command: ['redis-server', '--save', '60', '1', '--appendonly', 'no']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres-data:
+  redis-data:

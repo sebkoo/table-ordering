@@ -1,0 +1,24 @@
+#!/bin/sh
+#
+# Reject a commit message that violates the repository's message policy.
+#
+# core.hooksPath is git config rather than a committed file, so a fresh clone
+# does not inherit it and nothing in the tree can make it do so. The root
+# package's prepare script sets it during install, which is what makes this
+# hook active on any machine that has run pnpm install.
+
+set -e
+
+if ! command -v node >/dev/null 2>&1; then
+	echo "commit-msg: node was not found on PATH. Run pnpm install first." >&2
+	exit 1
+fi
+
+checker="$(git rev-parse --show-toplevel)/tools/check-commit-message.ts"
+
+if [ ! -f "$checker" ]; then
+	echo "commit-msg: cannot find $checker" >&2
+	exit 1
+fi
+
+exec node --disable-warning=ExperimentalWarning "$checker" "$1"
