@@ -111,9 +111,10 @@ it is started.
 | Step | State |
 | --- | --- |
 | Toolchain, convention checks, CI | Done |
+| Tenant schema | Done |
 | Guest menu, over HTTP | Done |
-| Tenant schema and isolation | Planned |
 | A page the guest's phone loads | Done |
+| Row-level security, so scope is not the query's job | Planned |
 | Table session | Planned |
 | Order submission that tolerates retries | Planned |
 | Kitchen board | Planned |
@@ -222,6 +223,8 @@ pnpm check-push --revision "$(git rev-parse HEAD)" \
   --require-environment
 ```
 
+Run against the push of `7a1d0a5`, it printed:
+
 ```
 push-arrived ....... PASS  origin holds 7a1d0a55f55fae8cda4eb672ec5ded9d58591656
 run-verified ....... PASS  run 32298949382, 10 verdict lines, all PASS
@@ -261,6 +264,7 @@ each with the alternatives that were rejected and why.
 - [0010 Observe the guest page in a real browser](docs/adr/0010-observe-the-guest-page-in-a-real-browser.md)
 - [0011 Report a check whose environment is absent as a skip](docs/adr/0011-skip-a-check-whose-environment-is-absent.md)
 - [0012 Record the commit procedure as a skill, and check its mechanical half after a push](docs/adr/0012-record-the-commit-procedure.md)
+- [0013 Bound the CI job in time, and take Chromium's libraries from the runner image](docs/adr/0013-bound-the-ci-job.md)
 
 ## Known limitations
 
@@ -291,7 +295,7 @@ each with the alternatives that were rejected and why.
   for a limited period, and after that the run cannot be verified this way. The
   check reports that the log could not be read, rather than reporting a run that
   printed nothing it recognised.
-- The convention checker carries four rules. The rest arrive with the code they
+- The convention checker carries five rules. The rest arrive with the code they
   govern, so that each rule shows up to a set of subjects that already comply.
 - `compose.yaml` carries development credentials inline, and starts a Redis
   that nothing connects to.

@@ -23,9 +23,23 @@ import {
   type Rule,
   readmeStatusDateRule,
   runRules,
+  workflowJobTimeoutRule,
 } from '../check-conventions.ts'
 
 const IDENTITY = 'committer@example.test'
+
+const WORKFLOW_WITH_BOUND = `name: CI
+
+on:
+  push:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: echo hello
+`
 
 function input(overrides: Partial<ConventionInput> = {}): ConventionInput {
   return {
@@ -42,6 +56,7 @@ function input(overrides: Partial<ConventionInput> = {}): ConventionInput {
         files: ['menu.test.ts', 'routes.ts', 'sql.ts'],
       },
     ],
+    workflowJobs: [{ path: '.github/workflows/ci.yml', job: 'verify', timeoutMinutes: 10 }],
     allowedIdentity: IDENTITY,
     requireHistory: false,
     ...overrides,
@@ -203,20 +218,20 @@ describe('the report', () => {
   // so they are null together or not at all, and an unborn repository's README
   // is untracked rather than modified. The file rules read the working tree, so
   // they evaluate before the first commit.
-  it('summarises a repository with no commits as two skips and two passes', () => {
+  it('summarises a repository with no commits as two skips and three passes', () => {
     const reports = runRules(
       createRules(input({ commitMessages: null, readmeCommitDates: null, readmeDirty: false })),
     )
     const text = formatReports(reports)
-    expect(text).toContain('4 checks: 2 PASS, 0 FAIL, 2 SKIP')
+    expect(text).toContain('5 checks: 3 PASS, 0 FAIL, 2 SKIP')
     expect(text).toContain('readme-status-date')
     expect(text).toContain('commit-message-policy')
     expect(hasFailure(reports)).toBe(false)
   })
 
-  it('summarises a clean committed tree as four passes', () => {
+  it('summarises a clean committed tree as five passes', () => {
     const reports = runRules(createRules(input({ requireHistory: true })))
-    expect(formatReports(reports)).toContain('4 checks: 4 PASS, 0 FAIL, 0 SKIP')
+    expect(formatReports(reports)).toContain('5 checks: 5 PASS, 0 FAIL, 0 SKIP')
     expect(hasFailure(reports)).toBe(false)
   })
 
@@ -231,12 +246,13 @@ describe('the report', () => {
     }
   })
 
-  it('ships exactly the four rules', () => {
+  it('ships exactly the five rules', () => {
     expect(createRules(input()).map((rule) => rule.name)).toEqual([
       'readme-status-date',
       'commit-message-policy',
       'migration-has-down',
       'feature-has-test',
+      'workflow-job-timeout',
     ])
   })
 })
@@ -396,6 +412,8 @@ describe('an unborn repository whose README.md is untracked', () => {
     writeFileSync(join(dir, 'services', 'api', 'migrations', '1.down.sql'), 'drop table x;\n')
     mkdirSync(join(dir, 'services', 'api', 'src', 'features', 'menu'), { recursive: true })
     writeFileSync(join(dir, 'services', 'api', 'src', 'features', 'menu', 'menu.test.ts'), '')
+    mkdirSync(join(dir, '.github', 'workflows'), { recursive: true })
+    writeFileSync(join(dir, '.github', 'workflows', 'ci.yml'), WORKFLOW_WITH_BOUND, 'utf8')
     return dir
   }
 
@@ -407,7 +425,13 @@ describe('an unborn repository whose README.md is untracked', () => {
 
   it('skips the two history checks, and names missing history as the reason', () => {
     const reports = runRules(createRules(collectInput(bootstrapRepo(), false)))
-    expect(reports.map((report) => report.verdict)).toEqual(['SKIP', 'SKIP', 'PASS', 'PASS'])
+    expect(reports.map((report) => report.verdict)).toEqual([
+      'SKIP',
+      'SKIP',
+      'PASS',
+      'PASS',
+      'PASS',
+    ])
     const readme = reports[0]?.outcome
     expect(readme?.status).toBe('skip')
     if (readme?.status === 'skip') {
@@ -417,14 +441,20 @@ describe('an unborn repository whose README.md is untracked', () => {
 
   it('fails the two history checks under --require-history', () => {
     const reports = runRules(createRules(collectInput(bootstrapRepo(), true)))
-    expect(reports.map((report) => report.verdict)).toEqual(['FAIL', 'FAIL', 'PASS', 'PASS'])
+    expect(reports.map((report) => report.verdict)).toEqual([
+      'FAIL',
+      'FAIL',
+      'PASS',
+      'PASS',
+      'PASS',
+    ])
   })
 })
 
 // ---------------------------------------------------------------------------
 
 /**
- * Both file rules are driven through `collectInput` against real directories,
+ * The file rules are driven through `collectInput` against real directories,
  * never through a hand-built input. A rule about files that is only ever shown
  * an object literal is a rule about object literals: it would keep agreeing
  * with a selector that reads the wrong path, or one that reads nothing at all.
@@ -566,6 +596,124 @@ describe('feature-has-test', () => {
 
   it('fails as vacuous when no workspace has a feature directory', () => {
     const report = runRules([featureHasTestRule(collectInput(newRepo(), false))])[0]
+    expect(report?.verdict).toBe('FAIL')
+    expect(report?.vacuous).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('workflow-job-timeout', () => {
+  function repoWithWorkflows(files: Record<string, string>): ConventionInput {
+    const dir = newRepo()
+    mkdirSync(join(dir, '.github', 'workflows'), { recursive: true })
+    for (const [name, text] of Object.entries(files)) {
+      writeFileSync(join(dir, '.github', 'workflows', name), text, 'utf8')
+    }
+    return collectInput(dir, false)
+  }
+
+  it('passes a job that declares a bound', () => {
+    const collected = repoWithWorkflows({ 'ci.yml': WORKFLOW_WITH_BOUND })
+    expect(collected.workflowJobs).toEqual([
+      { path: '.github/workflows/ci.yml', job: 'verify', timeoutMinutes: 10 },
+    ])
+    expect(workflowJobTimeoutRule(collected).check()).toEqual({ status: 'pass', subjects: 1 })
+  })
+
+  it('fails a job that declares none, and names it', () => {
+    const collected = repoWithWorkflows({
+      'ci.yml': WORKFLOW_WITH_BOUND.replace('    timeout-minutes: 10\n', ''),
+    })
+    const outcome = workflowJobTimeoutRule(collected).check()
+
+    expect(outcome.status).toBe('fail')
+    if (outcome.status === 'fail') {
+      expect(outcome.violations).toEqual([
+        { where: '.github/workflows/ci.yml jobs.verify', detail: 'declares no timeout-minutes' },
+      ])
+    }
+  })
+
+  // A step may carry its own bound, and a step's bound is not the job's: it
+  // ends one step while the job goes on. Reading the inner one as the outer
+  // would pass exactly the job this rule exists to catch.
+  it("does not read a step's bound as the job's", () => {
+    const collected = repoWithWorkflows({
+      'ci.yml': `jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hello
+        timeout-minutes: 3
+`,
+    })
+
+    expect(collected.workflowJobs).toEqual([
+      { path: '.github/workflows/ci.yml', job: 'verify', timeoutMinutes: null },
+    ])
+    expect(workflowJobTimeoutRule(collected).check()).toMatchObject({ status: 'fail' })
+  })
+
+  it('reads every job in a file, and every file in the directory', () => {
+    const collected = repoWithWorkflows({
+      'ci.yml': `jobs:
+  verify:
+    timeout-minutes: 10
+  publish:
+    runs-on: ubuntu-latest
+`,
+      'nightly.yaml': WORKFLOW_WITH_BOUND,
+    })
+
+    expect(collected.workflowJobs.map((job) => `${job.path} ${job.job}`)).toEqual([
+      '.github/workflows/ci.yml verify',
+      '.github/workflows/ci.yml publish',
+      '.github/workflows/nightly.yaml verify',
+    ])
+
+    const outcome = workflowJobTimeoutRule(collected).check()
+    expect(outcome.status).toBe('fail')
+    if (outcome.status === 'fail') {
+      expect(outcome.subjects).toBe(3)
+      expect(outcome.violations.map((violation) => violation.where)).toEqual([
+        '.github/workflows/ci.yml jobs.publish',
+      ])
+    }
+  })
+
+  // Keys below a block that is not `jobs:` are not jobs, however they are
+  // indented. A selector that read them would report subjects it never checked.
+  it('reads jobs only under the jobs key', () => {
+    const collected = repoWithWorkflows({
+      'ci.yml': `on:
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  verify:
+    timeout-minutes: 10
+`,
+    })
+    expect(collected.workflowJobs.map((job) => job.job)).toEqual(['verify'])
+  })
+
+  it('fails as vacuous when there is no workflow directory', () => {
+    const report = runRules([workflowJobTimeoutRule(collectInput(newRepo(), false))])[0]
+    expect(report?.verdict).toBe('FAIL')
+    expect(report?.vacuous).toBe(true)
+  })
+
+  // The scanner reads the block-mapping subset these files are written in. A
+  // file it cannot read must not read as a file with nothing wrong: it yields
+  // no subjects, and the vacuity contract turns that into a failure.
+  it('fails as vacuous on a workflow written in a shape it cannot read', () => {
+    const collected = repoWithWorkflows({
+      'ci.yml': 'jobs: { verify: { runs-on: ubuntu-latest } }\n',
+    })
+
+    expect(collected.workflowJobs).toEqual([])
+    const report = runRules([workflowJobTimeoutRule(collected)])[0]
     expect(report?.verdict).toBe('FAIL')
     expect(report?.vacuous).toBe(true)
   })

@@ -17,6 +17,13 @@ jobs:
     name: verify
     runs-on: ubuntu-latest
 
+    # The job's own bound. Without one it runs under the platform default of six
+    # hours, and on 2026-08-19 a stalled package mirror spent fifteen minutes of
+    # that before a person cancelled the run -- a person, not a timeout. Ten
+    # minutes is above the slowest run that has ever passed here, so it fails
+    # nothing this repository has actually completed, and well below that stall.
+    timeout-minutes: 10
+
     # The menu test talks to a real database. The published port matches the
     # one in compose.yaml, which is also the default in the connection string,
     # so the port is written down in one place and CI needs no extra
@@ -56,7 +63,13 @@ jobs:
       # and there is no `services:` block for one. The version comes from the
       # lockfile, and pnpm does not run the dependency's own install script, so
       # this is the only place a browser is fetched.
-      - run: pnpm --filter @table-ordering/guest exec playwright install --with-deps chromium
+      #
+      # No --with-deps. On this runner it installed no library Chromium needs --
+      # apt reported every one of them already present -- and spent 6m12s
+      # fetching 21MB of fonts, for scripts this page does not render, from the
+      # mirror that stalled. The browser itself comes from a different host and
+      # took ten seconds. ADR 0013.
+      - run: pnpm --filter @table-ordering/guest exec playwright install chromium
 
       # CI is a clean tree with the commit already made, so every convention
       # check has something to evaluate. A skip there is a failure: `verify`

@@ -54,6 +54,15 @@ export type Feature = {
   files: string[]
 }
 
+export type WorkflowJob = {
+  /** Repository-relative path of the workflow file declaring it. */
+  path: string
+  /** The job's own key under `jobs:`. */
+  job: string
+  /** The bound the job declares, or null when it declares none. */
+  timeoutMinutes: number | null
+}
+
 export type ConventionInput = {
   /** Contents of README.md, or null when there is no README.md. */
   readme: string | null
@@ -89,6 +98,14 @@ export type ConventionInput = {
    * whichever half it landed in.
    */
   features: Feature[]
+  /**
+   * Every job declared under `.github/workflows`, in file then declaration
+   * order, each carrying the bound it declares or null when it declares none.
+   * The number comes along rather than a boolean because "declares one" and
+   * "declares this one" are different questions, and only the first is asked
+   * here -- the second belongs to the file that has the reasons beside it.
+   */
+  workflowJobs: WorkflowJob[]
   /** The email address a Signed-off-by trailer must carry. */
   allowedIdentity: string
   /** Treat "no history to evaluate" as a failure rather than a skip. */
@@ -262,12 +279,47 @@ export function featureHasTestRule(input: ConventionInput): Rule {
   }
 }
 
+/**
+ * A job that declares no bound runs under the platform's default, which is six
+ * hours. Nobody chose that number, and a run that has stopped making progress
+ * spends all of it: what ends such a run is a person noticing, which is not a
+ * check and does not happen at night.
+ *
+ * The rule asks whether a bound is declared, never which one. What the right
+ * number is depends on what the job does, and it is decided in the workflow
+ * where the reasons can sit beside it; a checker that also capped the value
+ * would be legislating a wall clock for jobs nobody has written yet.
+ */
+export function workflowJobTimeoutRule(input: ConventionInput): Rule {
+  return {
+    name: 'workflow-job-timeout',
+    expectsSubjects: true,
+    check(): Outcome {
+      const violations: Violation[] = []
+
+      for (const job of input.workflowJobs) {
+        if (job.timeoutMinutes === null) {
+          violations.push({
+            where: `${job.path} jobs.${job.job}`,
+            detail: 'declares no timeout-minutes',
+          })
+        }
+      }
+
+      const subjects = input.workflowJobs.length
+      if (violations.length > 0) return { status: 'fail', subjects, violations }
+      return { status: 'pass', subjects }
+    },
+  }
+}
+
 export function createRules(input: ConventionInput): Rule[] {
   return [
     readmeStatusDateRule(input),
     commitMessagePolicyRule(input),
     migrationHasDownRule(input),
     featureHasTestRule(input),
+    workflowJobTimeoutRule(input),
   ]
 }
 
@@ -447,6 +499,71 @@ function readFeatures(root: string): Feature[] {
   return features
 }
 
+const WORKFLOWS = ['.github', 'workflows'] as const
+
+/** A column-zero key, which closes whatever block was open above it. */
+const TOP_LEVEL_KEY = /^\S/
+const JOBS_KEY = /^jobs:\s*$/
+/** A job's own key: two spaces, then a name, then nothing else on the line. */
+const JOB_KEY = /^ {2}([A-Za-z_][\w-]*):\s*$/
+/** The bound, at the job's own depth. Four spaces, so a step's is not read as one. */
+const JOB_TIMEOUT = /^ {4}timeout-minutes:\s*(\d+)\s*$/
+
+/**
+ * Every job in every workflow file, with the bound it declares.
+ *
+ * This reads the block-mapping subset these files are actually written in
+ * rather than parsing YAML, which would be a dependency bought for one rule.
+ * The subset is narrow on purpose, and the failure mode is the point: a file
+ * written in a shape this cannot read contributes no jobs, and the vacuity
+ * contract turns "no jobs anywhere" into a failure. A defeated scanner
+ * therefore reports that it inspected nothing, rather than reporting that it
+ * found no violations.
+ */
+function readWorkflowJobs(root: string): WorkflowJob[] {
+  const jobs: WorkflowJob[] = []
+  const directory = join(root, ...WORKFLOWS)
+
+  for (const file of names(directory, 'file')) {
+    if (!file.endsWith('.yml') && !file.endsWith('.yaml')) continue
+
+    let text: string
+    try {
+      text = readFileSync(join(directory, file), 'utf8')
+    } catch {
+      continue
+    }
+
+    const path = `${WORKFLOWS.join('/')}/${file}`
+    let inJobs = false
+    let current: WorkflowJob | null = null
+
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed === '' || trimmed.startsWith('#')) continue
+
+      if (TOP_LEVEL_KEY.test(line)) {
+        inJobs = JOBS_KEY.test(line)
+        current = null
+        continue
+      }
+      if (!inJobs) continue
+
+      const name = JOB_KEY.exec(line)?.[1]
+      if (name !== undefined) {
+        current = { path, job: name, timeoutMinutes: null }
+        jobs.push(current)
+        continue
+      }
+
+      const minutes = JOB_TIMEOUT.exec(line)?.[1]
+      if (current !== null && minutes !== undefined) current.timeoutMinutes = Number(minutes)
+    }
+  }
+
+  return jobs
+}
+
 export function collectInput(root: string, requireHistory: boolean): ConventionInput {
   let readme: string | null
   try {
@@ -493,6 +610,7 @@ export function collectInput(root: string, requireHistory: boolean): ConventionI
     commitMessages,
     migrations: readMigrations(root),
     features: readFeatures(root),
+    workflowJobs: readWorkflowJobs(root),
     allowedIdentity: (gitOrNull(root, ['config', '--get', 'user.email']) ?? '').trim(),
     requireHistory,
   }
