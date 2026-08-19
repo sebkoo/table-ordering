@@ -81,7 +81,13 @@ export type ConventionInput = {
    * says something" are different questions and the rule asks both.
    */
   migrations: Migration[]
-  /** Every directory under `services/<service>/src/features`, in path order. */
+  /**
+   * Every directory under `apps/<app>/src/features` and
+   * `services/<service>/src/features`, in path order. Both areas are read
+   * because a slice has a client half as well as a server half, and a slice
+   * that shipped without an executable acceptance condition is the same defect
+   * whichever half it landed in.
+   */
   features: Feature[]
   /** The email address a Signed-off-by trailer must carry. */
   allowedIdentity: string
@@ -231,6 +237,10 @@ export function migrationHasDownRule(input: ConventionInput): Rule {
  * that says it works. Nothing here judges what the test asserts; the rule
  * catches the case where a slice landed with no executable acceptance
  * condition at all, which is the one a reader cannot detect by looking.
+ *
+ * The selector reads apps as well as services. A guest client is where a slice
+ * stops being a JSON response and starts being something a person looks at,
+ * which is not a reason to check it less.
  */
 export function featureHasTestRule(input: ConventionInput): Rule {
   return {
@@ -412,16 +422,25 @@ function readMigrations(root: string): Migration[] {
   return migrations
 }
 
+/**
+ * The workspace areas that hold a slice today. `pnpm-workspace.yaml` also globs
+ * `packages/*`, which is not read here: nothing is in it, and a selector aimed
+ * at a directory that does not exist is a guess about what will be put there.
+ */
+const AREAS = ['apps', 'services'] as const
+
 function readFeatures(root: string): Feature[] {
   const features: Feature[] = []
 
-  for (const service of names(join(root, 'services'), 'directory')) {
-    const directory = join(root, 'services', service, 'src', 'features')
-    for (const feature of names(directory, 'directory')) {
-      features.push({
-        path: `services/${service}/src/features/${feature}`,
-        files: names(join(directory, feature), 'file'),
-      })
+  for (const area of AREAS) {
+    for (const workspace of names(join(root, area), 'directory')) {
+      const directory = join(root, area, workspace, 'src', 'features')
+      for (const feature of names(directory, 'directory')) {
+        features.push({
+          path: `${area}/${workspace}/src/features/${feature}`,
+          files: names(join(directory, feature), 'file'),
+        })
+      }
     }
   }
 

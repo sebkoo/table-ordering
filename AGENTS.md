@@ -33,6 +33,8 @@ that creates the thing it governs.
 - A release too new for pnpm's minimum release age is pinned back to an older
   release. The exclusion list is not used, because an exclusion satisfies the
   install by removing the check.
+- A fresh load of the guest page reaches no origin but its own. No remote font,
+  script, image, analytics or beacon, and a browser is what says so.
 
 ## Change size
 
@@ -61,8 +63,10 @@ that creates the thing it governs.
 ## Layout
 
 Vertical slices, not layers:
-`services/api/src/features/<feature>/{routes.ts,sql.ts,*.test.ts}`, with tests
-beside the code they test.
+`services/<service>/src/features/<feature>/{routes.ts,sql.ts,*.test.ts}` and
+`apps/<app>/src/features/<feature>/`, with tests beside the code they test. A
+slice's client half and its server half are the same slice, named the same, in
+the two places a workspace package lives.
 
 Directories come into existence when a real file is put in them. Do not
 reserve a directory ahead of the file that belongs in it, and do not add a

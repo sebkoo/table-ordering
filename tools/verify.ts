@@ -35,6 +35,16 @@ function steps(passThrough: readonly string[]): Step[] {
       args: ['--noEmit', '-p', join(root, 'tsconfig.base.json')],
       stream: false,
     },
+    // A second project rather than a wider first one. The guest client needs
+    // the DOM library, and adding it to the shared configuration would hand
+    // `document` and `window` to the API, where reaching for either is a
+    // runtime error that nothing would catch.
+    {
+      name: 'typecheck-guest',
+      command: localBin('tsc'),
+      args: ['--noEmit', '-p', join(root, 'apps', 'guest', 'tsconfig.json')],
+      stream: false,
+    },
     { name: 'lint', command: localBin('biome'), args: ['check', '.'], stream: false },
     { name: 'test', command: localBin('vitest'), args: ['run'], stream: false },
     {

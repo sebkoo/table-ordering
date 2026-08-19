@@ -1,0 +1,203 @@
+/**
+ * The acceptance conditions for the page a guest opens.
+ *
+ * Both are observed in a real browser, against the built client, over a real
+ * network. The dev server is not what a guest loads: it serves an unbundled
+ * module graph, and a remote URL that only appears in built CSS would walk past
+ * a measurement taken there. So this test builds the client and serves the
+ * build.
+ *
+ * Nothing here is a stand-in. The schema is created from the migration file,
+ * the API is the process `main.ts` starts, the page is the artefact `vite
+ * build` produces, and the browser is Chromium.
+ *
+ * The seeded item names carry this run's schema name. That is not decoration:
+ * the preview server reaches the API through a proxy, and if the proxy ever
+ * pointed somewhere else -- a developer's own API on port 3000, say -- the
+ * assertions below would be measuring a server this test did not start. Text
+ * only this run can produce is what makes that impossible to miss.
+ */
+
+import { type ChildProcess, spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { Pool } from 'pg'
+import { type Browser, type BrowserContext, chromium, type Page } from 'playwright'
+import { build, type PreviewServer, preview } from 'vite'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const ROOT = join(here, '..', '..', '..', '..', '..')
+const GUEST = join(ROOT, 'apps', 'guest')
+const API_ENTRY = join(ROOT, 'services', 'api', 'src', 'main.ts')
+const MIGRATION = join(ROOT, 'services', 'api', 'migrations', '0001-create-menu.up.sql')
+
+/** The credentials and published port in `compose.yaml`, as `services/api/src/main.ts` also carries them. */
+const DEFAULT_DATABASE_URL =
+  'postgres://table_ordering:table_ordering_dev@127.0.0.1:55432/table_ordering'
+
+const CONNECTION_STRING = process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL
+const SCHEMA = `guest_page_test_${process.pid}`
+const SLUG = 'blue-door'
+
+/**
+ * Seeded out of menu order, so the assertion on order proves the page renders
+ * what it was sent rather than what the database happened to hand back first.
+ *
+ * The yen row is there for the money invariant. JPY has no minor unit, so a
+ * price divided by a hard-coded 100 renders a hundredth of it, and only a
+ * currency whose exponent is not two can tell the two implementations apart.
+ */
+const ITEMS = [
+  { name: `Cinnamon bun ${SCHEMA}`, priceMinor: 450, currency: 'GBP', sortOrder: 20 },
+  { name: `Flat white ${SCHEMA}`, priceMinor: 300, currency: 'GBP', sortOrder: 10 },
+  { name: `Miso soup ${SCHEMA}`, priceMinor: 600, currency: 'JPY', sortOrder: 30 },
+]
+
+const LOCALE = 'en-GB'
+
+function money(priceMinor: number, currency: string): string {
+  const format = new Intl.NumberFormat(LOCALE, { style: 'currency', currency })
+  const digits = format.resolvedOptions().maximumFractionDigits ?? 2
+  return format.format(priceMinor / 10 ** digits)
+}
+
+let admin: Pool
+let api: ChildProcess
+let server: PreviewServer
+let browser: Browser
+let context: BrowserContext
+let page: Page
+let origin: string
+const requested: string[] = []
+
+/** Wait for the line `main.ts` prints once it is bound, and take the address from it. */
+function apiOrigin(child: ChildProcess): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let seen = ''
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => {
+      seen += chunk
+      const address = /api listening on (\S+)/.exec(seen)?.[1]
+      if (address !== undefined) resolve(new URL(address).origin)
+    })
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data', (chunk: string) => {
+      seen += chunk
+    })
+    child.once('exit', (code) => reject(new Error(`the api exited with ${code}: ${seen}`)))
+  })
+}
+
+beforeAll(async () => {
+  admin = new Pool({ connectionString: CONNECTION_STRING })
+  await admin.query(`drop schema if exists ${SCHEMA} cascade`)
+  await admin.query(`create schema ${SCHEMA}`)
+
+  const scoped = new Pool({
+    connectionString: CONNECTION_STRING,
+    options: `-c search_path=${SCHEMA}`,
+  })
+  await scoped.query(readFileSync(MIGRATION, 'utf8'))
+  await scoped.query('insert into restaurant (slug, name) values ($1, $2)', [SLUG, 'The Blue Door'])
+  for (const item of ITEMS) {
+    await scoped.query(
+      `insert into menu_item (restaurant_id, name, price_minor, currency, sort_order)
+       select id, $2, $3, $4, $5 from restaurant where slug = $1`,
+      [SLUG, item.name, item.priceMinor, item.currency, item.sortOrder],
+    )
+  }
+  await scoped.end()
+
+  // The API is spawned rather than imported: `apps/guest` does not depend on
+  // `services/api`, and a test is not a reason to open that boundary. The
+  // search_path travels in the connection string, so the child needs no
+  // knowledge of the throwaway schema beyond the URL it is given.
+  const url = new URL(CONNECTION_STRING)
+  url.searchParams.set('options', `-c search_path=${SCHEMA}`)
+  api = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', API_ENTRY], {
+    env: { ...process.env, DATABASE_URL: url.href, PORT: '0' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  const target = await apiOrigin(api)
+
+  await build({ root: GUEST, logLevel: 'warn' })
+  // The proxy rule lives here rather than in vite.config.ts on purpose. If this
+  // override were ever ignored, the page would get the preview server's index
+  // fallback instead of a menu and this suite would fail; a default in the
+  // config file would instead let it pass against whatever is on port 3000.
+  server = await preview({
+    root: GUEST,
+    logLevel: 'warn',
+    preview: { port: 0, strictPort: false, proxy: { '/restaurants': target } },
+  })
+  const resolved = server.resolvedUrls?.local[0]
+  if (resolved === undefined) throw new Error('the preview server reported no local URL')
+  origin = new URL(resolved).origin
+
+  browser = await chromium.launch()
+  // A fixed locale, because the prices below are formatted by the page through
+  // Intl and an assertion on formatted money is otherwise a bet on whatever
+  // locale the machine running the tests happens to have.
+  context = await browser.newContext({ locale: LOCALE })
+  // Below vitest's own timeout, so that an element that never arrives is
+  // reported as the assertion it belongs to rather than as a dead suite.
+  context.setDefaultTimeout(10_000)
+  page = await context.newPage()
+  page.on('request', (request) => requested.push(request.url()))
+
+  await page.goto(`${origin}/r/${SLUG}`, { waitUntil: 'networkidle' })
+})
+
+afterAll(async () => {
+  await context?.close()
+  await browser?.close()
+  await server?.close()
+  api?.kill()
+  await admin?.query(`drop schema if exists ${SCHEMA} cascade`)
+  await admin?.end()
+})
+
+describe('the page a guest opens', () => {
+  it("shows the restaurant and the items it is serving, in the restaurant's order", async () => {
+    await page.locator('main:not([data-state="loading"])').waitFor()
+
+    // Read what is there rather than waiting for what should be. `getAttribute`
+    // and `allTextContents` do not block on a match, so a page showing the
+    // wrong thing fails as a difference between two values instead of as a
+    // timeout that says only that something never turned up.
+    expect(await page.locator('main').getAttribute('data-state')).toBe('ready')
+    expect(await page.locator('h1').allTextContents()).toEqual(['The Blue Door'])
+    expect(await page.locator('li .name').allTextContents()).toEqual([
+      `Flat white ${SCHEMA}`,
+      `Cinnamon bun ${SCHEMA}`,
+      `Miso soup ${SCHEMA}`,
+    ])
+    expect(await page.locator('li .price').allTextContents()).toEqual([
+      money(300, 'GBP'),
+      money(450, 'GBP'),
+      money(600, 'JPY'),
+    ])
+  })
+
+  it('loads nothing from an origin other than its own', () => {
+    // Two assertions, because either one alone passes for the wrong reason. A
+    // collector that recorded nothing has an empty list of foreign origins, and
+    // a page that never asked the API would satisfy the first assertion while
+    // showing a menu it made up.
+    expect(requested).toContain(`${origin}/restaurants/${SLUG}/menu`)
+    expect(requested.filter((url) => !url.startsWith(`${origin}/`))).toEqual([])
+  })
+
+  it('says so, rather than showing nothing, when no restaurant is served at the slug', async () => {
+    const other = await context.newPage()
+    await other.goto(`${origin}/r/no-such-place`, { waitUntil: 'networkidle' })
+
+    const main = other.locator('main:not([data-state="loading"])')
+    await main.waitFor()
+    expect(await main.getAttribute('data-state')).toBe('unavailable')
+    expect(await main.textContent()).toContain('could not load')
+    await other.close()
+  })
+})

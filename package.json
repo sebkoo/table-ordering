@@ -12,10 +12,11 @@
     "prepare": "git config core.hooksPath .githooks",
     "verify": "node --disable-warning=ExperimentalWarning tools/verify.ts",
     "conventions": "node --disable-warning=ExperimentalWarning tools/check-conventions.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.base.json",
+    "typecheck": "tsc --noEmit -p tsconfig.base.json && tsc --noEmit -p apps/guest/tsconfig.json",
     "lint": "biome check .",
     "test": "vitest run",
-    "dev": "pnpm --filter @table-ordering/api dev"
+    "dev": "pnpm --filter @table-ordering/api dev",
+    "dev:guest": "pnpm --filter @table-ordering/guest dev"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.9",

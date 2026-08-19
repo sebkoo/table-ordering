@@ -495,21 +495,39 @@ describe('migration-has-down', () => {
 // ---------------------------------------------------------------------------
 
 describe('feature-has-test', () => {
-  function repoWithFeature(name: string, files: readonly string[]): ConventionInput {
+  type Feature = { area: 'apps' | 'services'; workspace: string; name: string; files: string[] }
+
+  function repoWithFeatures(...features: readonly Feature[]): ConventionInput {
     const dir = newRepo()
-    const feature = join(dir, 'services', 'api', 'src', 'features', name)
-    mkdirSync(feature, { recursive: true })
-    for (const file of files) writeFileSync(join(feature, file), '', 'utf8')
+    for (const feature of features) {
+      const path = join(dir, feature.area, feature.workspace, 'src', 'features', feature.name)
+      mkdirSync(path, { recursive: true })
+      for (const file of feature.files) writeFileSync(join(path, file), '', 'utf8')
+    }
     return collectInput(dir, false)
   }
 
+  const service = (files: string[]): Feature => ({
+    area: 'services',
+    workspace: 'api',
+    name: 'menu',
+    files,
+  })
+
+  const app = (files: string[]): Feature => ({
+    area: 'apps',
+    workspace: 'guest',
+    name: 'menu',
+    files,
+  })
+
   it('passes a feature directory that holds a test beside its code', () => {
-    const collected = repoWithFeature('menu', ['routes.ts', 'sql.ts', 'menu.test.ts'])
+    const collected = repoWithFeatures(service(['routes.ts', 'sql.ts', 'menu.test.ts']))
     expect(featureHasTestRule(collected).check()).toEqual({ status: 'pass', subjects: 1 })
   })
 
   it('fails a feature directory that holds only code', () => {
-    const collected = repoWithFeature('menu', ['routes.ts', 'sql.ts'])
+    const collected = repoWithFeatures(service(['routes.ts', 'sql.ts']))
     const outcome = featureHasTestRule(collected).check()
 
     expect(outcome.status).toBe('fail')
@@ -520,7 +538,33 @@ describe('feature-has-test', () => {
     }
   })
 
-  it('fails as vacuous when no service has a feature directory', () => {
+  // A guest client sits outside `services`, so a selector that reads only that
+  // area reports a clean pass while an entire application goes unchecked.
+  it('reads a feature directory in an app, not only in a service', () => {
+    const collected = repoWithFeatures(app(['menu.tsx']))
+    const outcome = featureHasTestRule(collected).check()
+
+    expect(outcome.status).toBe('fail')
+    if (outcome.status === 'fail') {
+      expect(outcome.violations).toEqual([
+        { where: 'apps/guest/src/features/menu', detail: 'holds no *.test.ts file' },
+      ])
+    }
+  })
+
+  it('counts a feature in each area, in path order', () => {
+    const collected = repoWithFeatures(
+      service(['routes.ts', 'menu.test.ts']),
+      app(['menu.tsx', 'menu.browser.test.ts']),
+    )
+    expect(collected.features.map((feature) => feature.path)).toEqual([
+      'apps/guest/src/features/menu',
+      'services/api/src/features/menu',
+    ])
+    expect(featureHasTestRule(collected).check()).toEqual({ status: 'pass', subjects: 2 })
+  })
+
+  it('fails as vacuous when no workspace has a feature directory', () => {
     const report = runRules([featureHasTestRule(collectInput(newRepo(), false))])[0]
     expect(report?.verdict).toBe('FAIL')
     expect(report?.vacuous).toBe(true)

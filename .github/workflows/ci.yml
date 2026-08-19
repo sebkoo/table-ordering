@@ -52,6 +52,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # The guest page's acceptance conditions are observed in a real browser,
+      # and there is no `services:` block for one. The version comes from the
+      # lockfile, and pnpm does not run the dependency's own install script, so
+      # this is the only place a browser is fetched.
+      - run: pnpm --filter @table-ordering/guest exec playwright install --with-deps chromium
+
       # CI is a clean tree with the commit already made, so every convention
       # check has something to evaluate. A skip here is a failure: `verify`
       # treats the CI environment variable the same as --require-history.

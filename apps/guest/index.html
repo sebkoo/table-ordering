@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Menu</title>
+    <!--
+      The styles are inline, and the font is whatever the phone already has.
+      A stylesheet or a font from somewhere else is a request to somewhere
+      else, and a guest reading a menu at a table does not need one.
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        line-height: 1.5;
+      }
+      body { margin: 0; }
+      main { max-width: 32rem; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+      h1 { font-size: 1.5rem; margin: 0 0 1.5rem; }
+      ul { list-style: none; margin: 0; padding: 0; }
+      li {
+        display: flex;
+        justify-content: space-between;
+        gap: 1.5rem;
+        padding: 0.75rem 0;
+        border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+      }
+      .price { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -8,7 +8,8 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-19 · the guest menu, served over HTTP. One route, one migration, no client yet.
+**Status:** 2026-08-19 · the guest menu, on a page a phone loads. Read only —
+nothing takes an order.
 
 ## What happens at the table
 
@@ -39,12 +40,27 @@ unavailable is answered `200` with an empty list — a guest sitting in a real
 restaurant that has sold out is not a guest at a restaurant that does not
 exist.
 
-There is no page for a phone to load yet, and no table, session or order.
+A guest opens `/r/blue-door` on their phone and gets that menu as a page:
+
+```
+The Blue Door
+
+Flat white                                                   £3.00
+Cinnamon bun                                                 £4.50
+```
+
+A fresh load of that page asks for nothing but its own origin. No font, script,
+image, analytics or beacon from anywhere else — and what says so is not a
+promise in this file, it is a browser test that loads the built page and
+inspects every request it made.
+
+The page is read only. There is no table, session or order, and no button that
+could start one.
 
 ### Next
 
-1. A guest will scan the code on their table and get that restaurant's menu on
-   their own phone, with no app to install and no account to create.
+1. A table will carry its own code, so a guest opens their table's page rather
+   than typing an address.
 2. They will build an order and send it. Sending it twice, from a flaky
    connection or a second tab, will produce one order rather than two.
 3. The kitchen will see the ticket. A kitchen client that drops off the network
@@ -54,7 +70,7 @@ There is no page for a phone to load yet, and no table, session or order.
 ## How a menu request is served
 
 ```
-  a guest's phone
+  the page on a guest's phone   apps/guest/src/features/menu/menu.tsx
         │   GET /restaurants/blue-door/menu
         ▼
   Fastify route ─────────────  services/api/src/features/menu/routes.ts
@@ -66,8 +82,13 @@ There is no page for a phone to load yet, and no table, session or order.
   PostgreSQL ────────────────  services/api/migrations/0001-create-menu.up.sql
         │   no rows → 404 · rows → the menu, serialised through the
         ▼   response schema, so only the fields it names can escape
-  a guest's phone
+  the page on a guest's phone
 ```
+
+The page asks for the menu at a relative path, so it reaches the API on the
+origin that served the page. In development the guest dev server proxies
+`/restaurants` across; the acceptance test does the same against an API it
+starts itself. Nothing deploys this yet, so nothing else does it in production.
 
 The response schema is the contract rather than a description of one. A column
 that starts coming back from the query cannot reach a guest unless the schema
@@ -84,15 +105,15 @@ and it is worth being able to run yourself.
 
 ## Roadmap
 
-The two rows marked Done are what exists. Everything else is planned, and
-none of it is started.
+The rows marked Done are what exists. Everything else is planned, and none of
+it is started.
 
 | Step | State |
 | --- | --- |
 | Toolchain, convention checks, CI | Done |
 | Guest menu, over HTTP | Done |
 | Tenant schema and isolation | Planned |
-| A page the guest's phone loads | Planned |
+| A page the guest's phone loads | Done |
 | Table session | Planned |
 | Order submission that tolerates retries | Planned |
 | Kitchen board | Planned |
@@ -142,10 +163,28 @@ curl -s localhost:3000/restaurants/blue-door/menu
 {"restaurant":{"slug":"blue-door","name":"The Blue Door"},"items":[{"name":"Flat white","priceMinor":300,"currency":"GBP"}]}
 ```
 
+The page a guest opens is a second process in development:
+
+```sh
+pnpm dev        # the API, on port 3000
+pnpm dev:guest  # the page, on port 5173
+```
+
+Then open `http://localhost:5173/r/blue-door`. The page asks for the menu at a
+relative path, and the guest dev server proxies `/restaurants` to the API, so
+the two are on one origin.
+
 Everything the repository checks runs in one command:
 
 ```sh
 pnpm verify
+```
+
+It drives a real browser as well as a real database. Install the one the
+lockfile pins, once per machine:
+
+```sh
+pnpm --filter @table-ordering/guest exec playwright install chromium
 ```
 
 `pnpm install` does one thing beyond fetching dependencies: it points git at
@@ -159,8 +198,10 @@ check had nothing to evaluate — commonly a convention check whose commit does
 not exist yet — and it says so on its own line. CI runs on a clean tree with
 the commit already made, so nothing skips there.
 
-`pnpm verify` needs the database running: the menu test talks to a real
-PostgreSQL and fails, rather than skipping, when it cannot reach one.
+`pnpm verify` needs the database and the browser running the checks above: the
+menu test talks to a real PostgreSQL, and the guest page's test builds the
+client and loads it in Chromium. Both fail, rather than skipping, when what they
+need is not there.
 
 `docker compose up -d` also starts Redis. Nothing connects to it yet, and it
 publishes no host port.
@@ -178,18 +219,29 @@ each with the alternatives that were rejected and why.
 - [0006 Keep changes small](docs/adr/0006-keep-changes-small.md)
 - [0007 Serve HTTP with Fastify, and validate at the boundary](docs/adr/0007-serve-http-with-fastify.md)
 - [0008 Version the schema as plain SQL migrations](docs/adr/0008-version-the-schema-as-plain-sql-migrations.md)
+- [0009 Render the guest page in the browser](docs/adr/0009-render-the-guest-page-in-the-browser.md)
+- [0010 Observe the guest page in a real browser](docs/adr/0010-observe-the-guest-page-in-a-real-browser.md)
 
 ## Known limitations
 
-- There is no guest client. The menu is JSON on an endpoint; nothing renders
-  it, and nothing takes an order.
+- The guest page is read only. It renders a menu and stops there: no table, no
+  session, no order, and no control that could begin one.
+- Nothing serves the built page in production. The page fetches the API at a
+  relative path, which the dev server and the acceptance test each proxy; a
+  deployment would have to route `/restaurants` to the API and answer
+  `/r/<slug>` with `index.html`.
+- A restaurant with nothing available gets a heading and an empty list. The page
+  does not say that everything has sold out, though the API distinguishes it
+  from a restaurant that does not exist.
 - A restaurant and its menu items can only be created by writing SQL, as the
   run steps above show. There is no admin route and no seed.
 - Nothing records which migrations a database has had applied. That is fine for
   one migration, and it is why the second one needs a runner first.
-- `pnpm verify` needs PostgreSQL running. The menu test fails rather than skips
-  when it cannot reach one: a test that skips itself on a missing dependency
-  reports success for a system nobody exercised.
+- `pnpm verify` needs PostgreSQL and a Chromium build. Both tests fail rather
+  than skip when what they need is missing: a test that skips itself on an
+  absent dependency reports success for a system nobody exercised.
+- CI downloads that browser on every run. Caching it is the obvious next move
+  and has not been made.
 - The convention checker carries four rules. The rest arrive with the code they
   govern, so that each rule shows up to a set of subjects that already comply.
 - `compose.yaml` carries development credentials inline, and starts a Redis
