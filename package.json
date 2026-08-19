@@ -12,6 +12,7 @@
     "prepare": "git config core.hooksPath .githooks",
     "verify": "node --disable-warning=ExperimentalWarning tools/verify.ts",
     "conventions": "node --disable-warning=ExperimentalWarning tools/check-conventions.ts",
+    "check-push": "node --disable-warning=ExperimentalWarning tools/check-push.ts",
     "typecheck": "tsc --noEmit -p tsconfig.base.json && tsc --noEmit -p apps/guest/tsconfig.json",
     "lint": "biome check .",
     "test": "vitest run",

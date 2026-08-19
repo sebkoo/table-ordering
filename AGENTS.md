@@ -42,6 +42,10 @@ that creates the thing it governs.
 - A browser assertion reads state and compares it. It does not wait for the
   state it expects: a wait that expires reports a timeout, which is what a dead
   server produces too, and names neither.
+- A check that reads output another program produced names every line it
+  expects and fails when one is absent. Zero matched lines is a failure: a
+  pattern that matches nothing reports no violations, and a check that inspected
+  nothing has established nothing.
 
 ## Change size
 
@@ -63,8 +67,9 @@ that creates the thing it governs.
    condition.
 3. **Implement** the smallest change that satisfies it.
 4. **Verify** with `pnpm verify`.
-5. **Read the whole diff.** Remove anything the acceptance condition does not
-   need.
+5. **Read the whole diff against the declaration** (`.claude/skills/land-a-change`).
+   Anything the declaration does not name comes out. Anything it names that
+   proved unnecessary is reported as a difference, never dropped in silence.
 6. **Commit.**
 
 ## Layout
@@ -113,6 +118,7 @@ not ahead of it.
 | `pnpm lint` | Biome, formatting and lint rules. |
 | `pnpm test` | Vitest. |
 | `pnpm conventions` | The repository convention checks alone. |
+| `pnpm check-push` | What the remote holds, after a push. Not part of `verify`. |
 | `docker compose up -d` | PostgreSQL and Redis. |
 
 `pnpm verify` reports `PASS`, `FAIL` or `SKIP` for each check. A `SKIP` means

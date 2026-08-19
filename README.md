@@ -212,6 +212,35 @@ have no such dependency and run either way. Pass `--require-environment` to turn
 those skips into failures — CI does, because CI provisions both, and a skip
 there would mean the provisioning silently stopped working.
 
+Everything above runs before a commit exists. What the remote holds *after* a
+push is a separate question, and `pnpm check-push` asks it:
+
+```sh
+pnpm check-push --revision "$(git rev-parse HEAD)" \
+  --description "Self-hosted table-side ordering for restaurants. ..." \
+  --topics docker,fastify,github-actions,monorepo,pnpm,postgresql,react,rest-api,typescript,vite,vitest \
+  --require-environment
+```
+
+```
+push-arrived ....... PASS  origin holds 7a1d0a55f55fae8cda4eb672ec5ded9d58591656
+run-verified ....... PASS  run 32298949382, 10 verdict lines, all PASS
+metadata-declared .. PASS  the description and 11 topics are as declared
+```
+
+Each line answers a question the obvious source answers wrongly. The revision
+comes from the server, not from the exit code of the push, which reports what
+the client believed it sent. The run is read for the per-check lines `verify`
+printed, not for its conclusion — a run whose environment-dependent checks
+skipped reads `success`. And the description and topics are compared against
+what you pass in rather than against a file in this repository, because a stored
+copy of the expectation drifts from the real one with nothing to notice; the
+repository's description and topics otherwise pass through no check at all.
+
+It needs `gh`. Without it the last two lines skip and name what is missing, and
+`--require-environment` turns those skips into failures, which is what the
+commit procedure passes.
+
 `docker compose up -d` also starts Redis. Nothing connects to it yet, and it
 publishes no host port.
 
@@ -231,6 +260,7 @@ each with the alternatives that were rejected and why.
 - [0009 Render the guest page in the browser](docs/adr/0009-render-the-guest-page-in-the-browser.md)
 - [0010 Observe the guest page in a real browser](docs/adr/0010-observe-the-guest-page-in-a-real-browser.md)
 - [0011 Report a check whose environment is absent as a skip](docs/adr/0011-skip-a-check-whose-environment-is-absent.md)
+- [0012 Record the commit procedure as a skill, and check its mechanical half after a push](docs/adr/0012-record-the-commit-procedure.md)
 
 ## Known limitations
 
@@ -254,6 +284,13 @@ each with the alternatives that were rejected and why.
   absent dependency — but it does mean the skip is keyed on absence alone.
 - CI downloads that browser on every run. Caching it is the obvious next move
   and has not been made.
+- Nothing forces `pnpm check-push` to be run. It is a step in the commit
+  procedure, not a gate, so a push nobody checked is indistinguishable from one
+  that passed.
+- `pnpm check-push` needs GitHub to still hold the run's log. Logs are retained
+  for a limited period, and after that the run cannot be verified this way. The
+  check reports that the log could not be read, rather than reporting a run that
+  printed nothing it recognised.
 - The convention checker carries four rules. The rest arrive with the code they
   govern, so that each rule shows up to a set of subjects that already comply.
 - `compose.yaml` carries development credentials inline, and starts a Redis
