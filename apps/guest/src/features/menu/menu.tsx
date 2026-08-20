@@ -11,6 +11,12 @@
 
 import { type ReactElement, useEffect, useState } from 'react'
 
+/**
+ * Which menu this is. A table's code is what a printed card carries; a
+ * restaurant's slug is the same menu with nobody sitting at it.
+ */
+export type Source = { kind: 'restaurant'; slug: string } | { kind: 'table'; code: string }
+
 type Item = {
   name: string
   priceMinor: number
@@ -19,10 +25,23 @@ type Item = {
 
 type Menu = {
   restaurant: { slug: string; name: string }
+  /** Present when a table's code was opened, absent when a restaurant's slug was. */
+  table?: { label: string }
   items: Item[]
 }
 
-type State = { kind: 'loading' } | { kind: 'ready'; menu: Menu } | { kind: 'unavailable' }
+type State =
+  | { kind: 'loading' }
+  | { kind: 'ready'; menu: Menu }
+  | { kind: 'unknown' }
+  | { kind: 'unreachable' }
+
+/** A relative path, so the request goes to the origin that served the page. */
+function pathFor(source: Source): string {
+  return source.kind === 'table'
+    ? `/tables/${encodeURIComponent(source.code)}/menu`
+    : `/restaurants/${encodeURIComponent(source.slug)}/menu`
+}
 
 /**
  * Prices arrive as an integer count of the currency's minor unit, which is how
@@ -37,29 +56,43 @@ function money(priceMinor: number, currency: string): string {
   return format.format(priceMinor / 10 ** digits)
 }
 
-export function Menu({ slug }: { slug: string }): ReactElement {
+export function Menu({ source }: { source: Source }): ReactElement {
   const [state, setState] = useState<State>({ kind: 'loading' })
+  // A string, so the effect does not re-run on an object that is merely new.
+  const endpoint = pathFor(source)
 
   useEffect(() => {
     let cancelled = false
 
-    // A relative path, so the request goes to the origin that served the page.
-    // 404 and a refused connection land in the same place on purpose: a guest
-    // holding a phone can do the same thing about either one.
-    fetch(`/restaurants/${encodeURIComponent(slug)}/menu`)
-      .then((response) => (response.ok ? (response.json() as Promise<Menu>) : null))
-      .then((menu) => {
-        if (cancelled) return
-        setState(menu === null ? { kind: 'unavailable' } : { kind: 'ready', menu })
-      })
-      .catch(() => {
-        if (!cancelled) setState({ kind: 'unavailable' })
+    /**
+     * Partitioned by what the guest can do about it, not by what went wrong.
+     * The two statuses this API answers with are both final: 400 is an address
+     * its pattern rejects and 404 is one it serves nothing at, and a code that
+     * was mistyped, truncated or badly printed is not fixed by asking again.
+     * Everything else -- a server that is down, a proxy in the way, a body that
+     * will not parse -- might be, so it is worth trying again and says so.
+     *
+     * Splitting on the remedy rather than on the cause is what stops the next
+     * status anyone meets from needing a state of its own.
+     */
+    const resolve = async (): Promise<State> => {
+      const response = await fetch(endpoint)
+      if (response.ok) return { kind: 'ready', menu: (await response.json()) as Menu }
+      return response.status === 400 || response.status === 404
+        ? { kind: 'unknown' }
+        : { kind: 'unreachable' }
+    }
+
+    resolve()
+      .catch((): State => ({ kind: 'unreachable' }))
+      .then((next) => {
+        if (!cancelled) setState(next)
       })
 
     return () => {
       cancelled = true
     }
-  }, [slug])
+  }, [endpoint])
 
   if (state.kind === 'loading') {
     return (
@@ -69,10 +102,24 @@ export function Menu({ slug }: { slug: string }): ReactElement {
     )
   }
 
-  if (state.kind === 'unavailable') {
+  // Names no restaurant, and cannot: a table's URL carries only the code, so
+  // the page does not know which restaurant it failed to find. The wording
+  // holds for both statuses that land here.
+  if (state.kind === 'unknown') {
     return (
-      <main data-state="unavailable">
-        <p>We could not load a menu at this address.</p>
+      <main data-state="unknown">
+        <p>
+          This address is not in use. If you scanned the code on your table, please ask a member of
+          staff.
+        </p>
+      </main>
+    )
+  }
+
+  if (state.kind === 'unreachable') {
+    return (
+      <main data-state="unreachable">
+        <p>We could not reach the menu just now. Please try again.</p>
       </main>
     )
   }
@@ -80,6 +127,7 @@ export function Menu({ slug }: { slug: string }): ReactElement {
   return (
     <main data-state="ready">
       <h1>{state.menu.restaurant.name}</h1>
+      {state.menu.table !== undefined && <p className="table">{state.menu.table.label}</p>}
       <ul>
         {state.menu.items.map((item) => (
           <li key={item.name}>

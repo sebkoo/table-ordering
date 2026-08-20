@@ -1,15 +1,17 @@
 /**
  * The acceptance conditions for the page a guest opens.
  *
- * Both are observed in a real browser, against the built client, over a real
- * network. The dev server is not what a guest loads: it serves an unbundled
- * module graph, and a remote URL that only appears in built CSS would walk past
- * a measurement taken there. So this test builds the client and serves the
- * build.
+ * Every one is observed in a real browser, against the built client, over a
+ * real network. The dev server is not what a guest loads: it serves an
+ * unbundled module graph, and a remote URL that only appears in built CSS would
+ * walk past a measurement taken there. So this test builds the client and
+ * serves the build.
  *
- * Nothing here is a stand-in. The schema is created from the migration file,
- * the API is the process `main.ts` starts, the page is the artefact `vite
- * build` produces, and the browser is Chromium.
+ * Nothing here is a stand-in, including the failure. The schema is created from
+ * the migration files, the API is the process `main.ts` starts, the page is the
+ * artefact `vite build` produces, and the browser is Chromium; the condition
+ * about a menu that cannot be reached stops that API rather than intercepting
+ * the request the page makes for it.
  *
  * The seeded item names carry this run's schema name. That is not decoration:
  * the preview server reaches the API through a proxy, and if the proxy ever
@@ -19,6 +21,7 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -31,7 +34,9 @@ const here = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(here, '..', '..', '..', '..', '..')
 const GUEST = join(ROOT, 'apps', 'guest')
 const API_ENTRY = join(ROOT, 'services', 'api', 'src', 'main.ts')
-const MIGRATION = join(ROOT, 'services', 'api', 'migrations', '0001-create-menu.up.sql')
+const MIGRATIONS = ['0001-create-menu.up.sql', '0002-create-restaurant-table.up.sql'].map((name) =>
+  join(ROOT, 'services', 'api', 'migrations', name),
+)
 
 /** The credentials and published port in `compose.yaml`, as `services/api/src/main.ts` also carries them. */
 const DEFAULT_DATABASE_URL =
@@ -40,6 +45,16 @@ const DEFAULT_DATABASE_URL =
 const CONNECTION_STRING = process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL
 const SCHEMA = `guest_page_test_${process.pid}`
 const SLUG = 'blue-door'
+
+/**
+ * The code this run prints on its table, and the label the page should show.
+ * The code is lowercase alphanumeric because that is what a printed card
+ * carries and what the route's pattern admits; the label carries the schema
+ * name for the same reason the item names do, so an assertion on it cannot be
+ * satisfied by a server this test did not start.
+ */
+const CODE = `t${process.pid}f2m9k4x1`
+const LABEL = `Table 7 ${SCHEMA}`
 
 /**
  * Seeded out of menu order, so the assertion on order proves the page renders
@@ -99,8 +114,13 @@ beforeAll(async () => {
     connectionString: CONNECTION_STRING,
     options: `-c search_path=${SCHEMA}`,
   })
-  await scoped.query(readFileSync(MIGRATION, 'utf8'))
+  for (const migration of MIGRATIONS) await scoped.query(readFileSync(migration, 'utf8'))
   await scoped.query('insert into restaurant (slug, name) values ($1, $2)', [SLUG, 'The Blue Door'])
+  await scoped.query(
+    `insert into restaurant_table (restaurant_id, code, label)
+     select id, $2, $3 from restaurant where slug = $1`,
+    [SLUG, CODE, LABEL],
+  )
   for (const item of ITEMS) {
     await scoped.query(
       `insert into menu_item (restaurant_id, name, price_minor, currency, sort_order)
@@ -130,7 +150,11 @@ beforeAll(async () => {
   server = await preview({
     root: GUEST,
     logLevel: 'warn',
-    preview: { port: 0, strictPort: false, proxy: { '/restaurants': target } },
+    preview: {
+      port: 0,
+      strictPort: false,
+      proxy: { '/restaurants': target, '/tables': target },
+    },
   })
   const resolved = server.resolvedUrls?.local[0]
   if (resolved === undefined) throw new Error('the preview server reported no local URL')
@@ -196,8 +220,69 @@ describe('the page a guest opens', () => {
 
     const main = other.locator('main:not([data-state="loading"])')
     await main.waitFor()
-    expect(await main.getAttribute('data-state')).toBe('unavailable')
-    expect(await main.textContent()).toContain('could not load')
+    expect(await main.getAttribute('data-state')).toBe('unknown')
+    expect(await main.textContent()).toContain('ask a member of staff')
+    await other.close()
+  })
+})
+
+describe('the page a guest opens from the code on their table', () => {
+  it('names the table as well as the restaurant, and serves that table its menu', async () => {
+    const table = await context.newPage()
+    await table.goto(`${origin}/t/${CODE}`, { waitUntil: 'networkidle' })
+    await table.locator('main:not([data-state="loading"])').waitFor()
+
+    expect(await table.locator('main').getAttribute('data-state')).toBe('ready')
+    expect(await table.locator('h1').allTextContents()).toEqual(['The Blue Door'])
+    expect(await table.locator('.table').allTextContents()).toEqual([LABEL])
+    expect(await table.locator('li .name').allTextContents()).toEqual([
+      `Flat white ${SCHEMA}`,
+      `Cinnamon bun ${SCHEMA}`,
+      `Miso soup ${SCHEMA}`,
+    ])
+    await table.close()
+  })
+
+  // The two states below are the same state to the server -- neither is a menu
+  // -- and different states to the guest. Retrying fixes neither, so both send
+  // the guest to a person rather than to the reload button.
+  it('sends the guest to staff when no table is served at the code', async () => {
+    const other = await context.newPage()
+    await other.goto(`${origin}/t/000000000000`, { waitUntil: 'networkidle' })
+
+    const main = other.locator('main:not([data-state="loading"])')
+    await main.waitFor()
+    expect(await main.getAttribute('data-state')).toBe('unknown')
+    expect(await main.textContent()).toContain('ask a member of staff')
+    await other.close()
+  })
+
+  it('sends the guest to staff when the code is not one the address can hold', async () => {
+    const other = await context.newPage()
+    await other.goto(`${origin}/t/NOT-A-CODE`, { waitUntil: 'networkidle' })
+
+    const main = other.locator('main:not([data-state="loading"])')
+    await main.waitFor()
+    expect(await main.getAttribute('data-state')).toBe('unknown')
+    expect(await main.textContent()).toContain('ask a member of staff')
+    await other.close()
+  })
+
+  // Last in this file on purpose, because it stops the API every condition
+  // above needs. It is stopped through the handle this suite started it with,
+  // so nothing here depends on a container runtime or on a process anyone else
+  // is running.
+  it('tells the guest to try again, rather than to find staff, when the menu cannot be reached', async () => {
+    api.kill()
+    await once(api, 'exit')
+
+    const other = await context.newPage()
+    await other.goto(`${origin}/t/${CODE}`, { waitUntil: 'networkidle' })
+
+    const main = other.locator('main:not([data-state="loading"])')
+    await main.waitFor()
+    expect(await main.getAttribute('data-state')).toBe('unreachable')
+    expect(await main.textContent()).toContain('try again')
     await other.close()
   })
 })

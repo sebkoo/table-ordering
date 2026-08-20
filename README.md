@@ -8,7 +8,7 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-19 · the guest menu, on a page a phone loads. Read only —
+**Status:** 2026-08-20 · a table's own code, on a page a phone loads. Read only —
 nothing takes an order.
 
 ## What happens at the table
@@ -40,46 +40,82 @@ unavailable is answered `200` with an empty list — a guest sitting in a real
 restaurant that has sold out is not a guest at a restaurant that does not
 exist.
 
-A guest opens `/r/blue-door` on their phone and gets that menu as a page:
+Each table carries its own code, and that code is the whole of the address a
+card prints:
+
+```
+GET /tables/9f3c1a7b20de/menu
+```
+
+```json
+{
+  "restaurant": { "slug": "blue-door", "name": "The Blue Door" },
+  "table": { "label": "Table 7" },
+  "items": [
+    { "name": "Flat white", "priceMinor": 300, "currency": "GBP" }
+  ]
+}
+```
+
+The code names one table, the table names one restaurant, and the menu follows
+from that — so a guest never types a restaurant's name and the card never
+carries one. It is opaque rather than `blue-door/7` because a printed code
+cannot be revised: a rename would kill every card in the building, and a
+number anyone can count to is an address anyone can construct, which costs
+nothing today and costs someone else's order once a code says where the food
+goes. It is not a secret, though. It is printed on a table in a public room,
+and holding it authorises nothing.
+
+A guest opens `/t/9f3c1a7b20de` on their phone and gets that menu as a page:
 
 ```
 The Blue Door
+Table 7
 
 Flat white                                                   £3.00
 Cinnamon bun                                                 £4.50
 ```
+
+`/r/blue-door` still answers with the same menu and no table, for a restaurant
+that wants to put its menu on a link.
 
 A fresh load of that page asks for nothing but its own origin. No font, script,
 image, analytics or beacon from anywhere else — and what says so is not a
 promise in this file, it is a browser test that loads the built page and
 inspects every request it made.
 
-The page is read only. There is no table, session or order, and no button that
-could start one.
+The page is read only. A guest opens their own table and the page names it, but
+there is no session, no order, and no button that could start one. A table is a
+row in the schema, not a record of anyone's visit: nothing yet groups what one
+sitting ordered, and nothing is written when a guest arrives.
+
+An address the page cannot serve says which kind it is. A code no table uses,
+and a code the address cannot hold at all, both send the guest to a member of
+staff — asking again will not help either one. A menu that cannot be fetched
+says to try again instead.
 
 ### Next
 
-1. A table will carry its own code, so a guest opens their table's page rather
-   than typing an address.
-2. They will build an order and send it. Sending it twice, from a flaky
-   connection or a second tab, will produce one order rather than two.
-3. The kitchen will see the ticket. A kitchen client that drops off the network
+1. Guests will build an order and send it. Sending it twice, from a flaky
+   connection or a second tab, will produce one order rather than two, and that
+   is where a sitting starts being recorded.
+2. The kitchen will see the ticket. A kitchen client that drops off the network
    will be able to reconnect and pick up where it left off.
-4. Staff will be able to see what each table has ordered and what is still open.
+3. Staff will be able to see what each table has ordered and what is still open.
 
 ## How a menu request is served
 
 ```
   the page on a guest's phone   apps/guest/src/features/menu/menu.tsx
-        │   GET /restaurants/blue-door/menu
+        │   GET /tables/9f3c1a7b20de/menu   (or /restaurants/blue-door/menu)
         ▼
   Fastify route ─────────────  services/api/src/features/menu/routes.ts
-        │   the slug is validated against the route's JSON Schema
-        ▼
+        │   the code is validated against the route's JSON Schema
+        ▼   a pattern it fails → 400, which is not the same answer as 404
   one SQL query ─────────────  services/api/src/features/menu/sql.ts
-        │   restaurant LEFT JOIN the menu_item rows that are available
-        ▼
-  PostgreSQL ────────────────  services/api/migrations/0001-create-menu.up.sql
+        │   restaurant_table JOIN restaurant, LEFT JOIN the available items
+        ▼   the code finds the restaurant; every join after it is scoped by it
+  PostgreSQL ────────────────  services/api/migrations/*.up.sql
         │   no rows → 404 · rows → the menu, serialised through the
         ▼   response schema, so only the fields it names can escape
   the page on a guest's phone
@@ -87,8 +123,9 @@ could start one.
 
 The page asks for the menu at a relative path, so it reaches the API on the
 origin that served the page. In development the guest dev server proxies
-`/restaurants` across; the acceptance test does the same against an API it
-starts itself. Nothing deploys this yet, so nothing else does it in production.
+`/tables` and `/restaurants` across; the acceptance test does the same against
+an API it starts itself. Nothing deploys this yet, so nothing else does it in
+production.
 
 The response schema is the contract rather than a description of one. A column
 that starts coming back from the query cannot reach a guest unless the schema
@@ -115,7 +152,7 @@ it is started.
 | Guest menu, over HTTP | Done |
 | A page the guest's phone loads | Done |
 | Row-level security, so scope is not the query's job | Planned |
-| Table session | Planned |
+| A table's own code, on the guest's page | Done |
 | Order submission that tolerates retries | Planned |
 | Kitchen board | Planned |
 | Payment, as an option rather than a requirement | Planned |
@@ -136,32 +173,44 @@ up beside whatever PostgreSQL you already run. If 55432 is taken, change it in
 `compose.yaml` and set `DATABASE_URL` to match.
 
 Create the schema. There is no migration runner yet, so this is `psql` reading
-the migration:
+each migration in turn, on a database that has had none of them —
+re-applying one raises `relation already exists` and stops, which is the loud
+failure the absence of a runner rests on. `--single-transaction` is not
+optional: without it `psql` commits each statement as it goes, and a file that
+failed halfway would leave the half behind
+([ADR 0015](docs/adr/0015-apply-the-second-migration-by-hand.md)):
 
 ```sh
-docker compose exec -T postgres psql -U table_ordering -d table_ordering \
-  < services/api/migrations/0001-create-menu.up.sql
+for m in services/api/migrations/*.up.sql; do
+  docker compose exec -T postgres \
+    psql -U table_ordering -d table_ordering --single-transaction < "$m"
+done
 ```
 
-Give it a restaurant to serve. There is no admin route yet either:
+Give it a restaurant to serve, and a table to sit at. There is no admin route
+yet either. The code is the address the table's card will carry, so mint it
+rather than choose it — `openssl rand -hex 6` produced the one below — and do
+not name the table in it:
 
 ```sh
 docker compose exec -T postgres psql -U table_ordering -d table_ordering <<'SQL'
 insert into restaurant (slug, name) values ('blue-door', 'The Blue Door');
 insert into menu_item (restaurant_id, name, price_minor, currency, sort_order)
 select id, 'Flat white', 300, 'GBP', 10 from restaurant where slug = 'blue-door';
+insert into restaurant_table (restaurant_id, code, label)
+select id, '9f3c1a7b20de', 'Table 7' from restaurant where slug = 'blue-door';
 SQL
 ```
 
-Then start the API and ask it for the menu:
+Then start the API and ask it for that table's menu:
 
 ```sh
 pnpm dev
-curl -s localhost:3000/restaurants/blue-door/menu
+curl -s localhost:3000/tables/9f3c1a7b20de/menu
 ```
 
 ```json
-{"restaurant":{"slug":"blue-door","name":"The Blue Door"},"items":[{"name":"Flat white","priceMinor":300,"currency":"GBP"}]}
+{"restaurant":{"slug":"blue-door","name":"The Blue Door"},"table":{"label":"Table 7"},"items":[{"name":"Flat white","priceMinor":300,"currency":"GBP"}]}
 ```
 
 The page a guest opens is a second process in development:
@@ -171,9 +220,11 @@ pnpm dev        # the API, on port 3000
 pnpm dev:guest  # the page, on port 5173
 ```
 
-Then open `http://localhost:5173/r/blue-door`. The page asks for the menu at a
-relative path, and the guest dev server proxies `/restaurants` to the API, so
-the two are on one origin.
+Then open `http://localhost:5173/t/9f3c1a7b20de`, which is what the card on that
+table would point at. `http://localhost:5173/r/blue-door` gives the same menu
+with no table. The page asks for the menu at a relative path, and the guest dev
+server proxies `/tables` and `/restaurants` to the API, so the two are on one
+origin.
 
 Everything the repository checks runs in one command:
 
@@ -265,22 +316,33 @@ each with the alternatives that were rejected and why.
 - [0011 Report a check whose environment is absent as a skip](docs/adr/0011-skip-a-check-whose-environment-is-absent.md)
 - [0012 Record the commit procedure as a skill, and check its mechanical half after a push](docs/adr/0012-record-the-commit-procedure.md)
 - [0013 Bound the CI job in time, and take Chromium's libraries from the runner image](docs/adr/0013-bound-the-ci-job.md)
+- [0014 Print a table's own code, and make it the guest's URL](docs/adr/0014-print-a-tables-own-code-and-make-it-the-guests-url.md)
+- [0015 Apply the second migration by hand, and defer the runner to a named trigger](docs/adr/0015-apply-the-second-migration-by-hand.md)
 
 ## Known limitations
 
-- The guest page is read only. It renders a menu and stops there: no table, no
-  session, no order, and no control that could begin one.
+- The guest page is read only. It renders a table's menu and stops there: no
+  session, no order, and no control that could begin one. A table is furniture
+  in the schema; nothing records that anyone sat at it.
+- A table's code cannot be revoked without reprinting the card it is on, and
+  nothing in the schema or the route makes a code hard to guess — the pattern
+  would accept `table001`. That property lives entirely in how the code is
+  minted, which is why the run steps above mint one rather than choose one.
 - Nothing serves the built page in production. The page fetches the API at a
   relative path, which the dev server and the acceptance test each proxy; a
-  deployment would have to route `/restaurants` to the API and answer
-  `/r/<slug>` with `index.html`.
+  deployment would have to route `/tables` and `/restaurants` to the API and
+  answer `/t/<code>` and `/r/<slug>` with `index.html`.
 - A restaurant with nothing available gets a heading and an empty list. The page
   does not say that everything has sold out, though the API distinguishes it
   from a restaurant that does not exist.
-- A restaurant and its menu items can only be created by writing SQL, as the
-  run steps above show. There is no admin route and no seed.
-- Nothing records which migrations a database has had applied. That is fine for
-  one migration, and it is why the second one needs a runner first.
+- A restaurant, its menu items and its tables can only be created by writing
+  SQL, as the run steps above show. There is no admin route and no seed.
+- Nothing records which migrations a database has had applied, so a developer
+  with an older clone has to know which ones they have run. That holds while
+  every migration creates structure and re-applying one errors rather than
+  changing anything; the runner arrives with the first deployment, or with the
+  first migration that alters data
+  ([ADR 0015](docs/adr/0015-apply-the-second-migration-by-hand.md)).
 - The database probe is a TCP connect. It answers whether something is
   accepting connections at the address the tests use, not whether that
   something is PostgreSQL, so a wrong service on the port fails the suites

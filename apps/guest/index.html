@@ -26,6 +26,14 @@
         padding: 0.75rem 0;
         border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
       }
+      /* The table's name belongs to the heading above it, not to the list
+         below it. Without this it renders at an item's weight, a step from the
+         first item and two from the restaurant, and reads as a line of the
+         menu that forgot its price. */
+      .table {
+        margin: -1rem 0 1.5rem;
+        color: color-mix(in srgb, currentColor 65%, transparent);
+      }
       .price { font-variant-numeric: tabular-nums; white-space: nowrap; }
     </style>
   </head>

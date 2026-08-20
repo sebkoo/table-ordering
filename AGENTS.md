@@ -30,6 +30,12 @@ that creates the thing it governs.
   wire.
 - A restaurant's rows are read only through a query scoped to that restaurant.
   Row-level security is not in place, so the scope is the query's job.
+- One query resolves a printed code to the restaurant that owns it, and it is
+  the only one with no restaurant to scope by. Every query after it is scoped by
+  the restaurant it returned, never by anything the caller sent.
+- A table is identified by the code printed on it. The code is unique across
+  restaurants, is not derived from the table's label, and is not a secret: it is
+  printed in public view, so holding it authorises nothing.
 - A release too new for pnpm's minimum release age is pinned back to an older
   release. The exclusion list is not used, because an exclusion satisfies the
   install by removing the check.

@@ -13,6 +13,12 @@ import { defineConfig } from 'vite'
  */
 export default defineConfig({
   server: {
-    proxy: { '/restaurants': 'http://127.0.0.1:3000' },
+    // Both prefixes the page fetches. A rule missing here does not fail
+    // loudly: the dev server answers its own index.html instead, so the page
+    // receives a document where it expects a menu.
+    proxy: {
+      '/restaurants': 'http://127.0.0.1:3000',
+      '/tables': 'http://127.0.0.1:3000',
+    },
   },
 })
