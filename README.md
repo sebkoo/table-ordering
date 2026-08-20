@@ -174,10 +174,10 @@ up beside whatever PostgreSQL you already run. If 55432 is taken, change it in
 
 Create the schema. There is no migration runner yet, so this is `psql` reading
 each migration in turn, on a database that has had none of them —
-re-applying one raises `relation already exists` and stops, which is the loud
-failure the absence of a runner rests on. `--single-transaction` is not
-optional: without it `psql` commits each statement as it goes, and a file that
-failed halfway would leave the half behind
+re-applying one raises `relation already exists`, and nothing is applied —
+the loud failure the absence of a runner rests on. `--single-transaction` is
+not optional: without it `psql` commits each statement as it goes, and a file
+that failed halfway would leave the half behind
 ([ADR 0015](docs/adr/0015-apply-the-second-migration-by-hand.md)):
 
 ```sh
@@ -190,10 +190,18 @@ done
 Give it a restaurant to serve, and a table to sit at. There is no admin route
 yet either. The code is the address the table's card will carry, so mint it
 rather than choose it — `openssl rand -hex 6` produced the one below — and do
-not name the table in it:
+not name the table in it.
+
+The flag is not optional here either, and it buys more than it does above.
+`restaurant` and `restaurant_table` each carry a unique constraint that stops a
+second run; `menu_item` carries none. Without `--single-transaction` a repeated
+run therefore leaves the item behind on its own, duplicated, while the two
+inserts around it fail — and `psql` exits 0 having reported the failures on
+stderr and nothing about what it kept:
 
 ```sh
-docker compose exec -T postgres psql -U table_ordering -d table_ordering <<'SQL'
+docker compose exec -T postgres \
+  psql -U table_ordering -d table_ordering --single-transaction <<'SQL'
 insert into restaurant (slug, name) values ('blue-door', 'The Blue Door');
 insert into menu_item (restaurant_id, name, price_minor, currency, sort_order)
 select id, 'Flat white', 300, 'GBP', 10 from restaurant where slug = 'blue-door';
@@ -318,6 +326,7 @@ each with the alternatives that were rejected and why.
 - [0013 Bound the CI job in time, and take Chromium's libraries from the runner image](docs/adr/0013-bound-the-ci-job.md)
 - [0014 Print a table's own code, and make it the guest's URL](docs/adr/0014-print-a-tables-own-code-and-make-it-the-guests-url.md)
 - [0015 Apply the second migration by hand, and defer the runner to a named trigger](docs/adr/0015-apply-the-second-migration-by-hand.md)
+- [0016 Make every run step atomic, and check the flag rather than restate it](docs/adr/0016-make-every-run-step-atomic.md)
 
 ## Known limitations
 
@@ -357,7 +366,7 @@ each with the alternatives that were rejected and why.
   for a limited period, and after that the run cannot be verified this way. The
   check reports that the log could not be read, rather than reporting a run that
   printed nothing it recognised.
-- The convention checker carries five rules. The rest arrive with the code they
+- The convention checker carries six rules. The rest arrive with the code they
   govern, so that each rule shows up to a set of subjects that already comply.
 - `compose.yaml` carries development credentials inline, and starts a Redis
   that nothing connects to.

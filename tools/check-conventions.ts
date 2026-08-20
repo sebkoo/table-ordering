@@ -63,6 +63,13 @@ export type WorkflowJob = {
   timeoutMinutes: number | null
 }
 
+export type RunStepCommand = {
+  /** 1-based line in README.md where the command begins. */
+  line: number
+  /** The command, with backslash continuations joined into one line. */
+  text: string
+}
+
 export type ConventionInput = {
   /** Contents of README.md, or null when there is no README.md. */
   readme: string | null
@@ -106,12 +113,21 @@ export type ConventionInput = {
    * here -- the second belongs to the file that has the reasons beside it.
    */
   workflowJobs: WorkflowJob[]
+  /**
+   * Every command in README.md's shell-tagged code blocks that invokes `psql`,
+   * in file order, with backslash continuations already joined. The joining
+   * happens here rather than in the rule because a continuation can separate an
+   * invocation from its flag, and a rule shown one physical line at a time
+   * would both invent violations and miss them.
+   */
+  runStepCommands: RunStepCommand[]
   /** The email address a Signed-off-by trailer must carry. */
   allowedIdentity: string
   /** Treat "no history to evaluate" as a failure rather than a skip. */
   requireHistory: boolean
 }
 
+const SINGLE_TRANSACTION = '--single-transaction'
 const STATUS_LINE = /^\*\*Status:\*\*.*$/m
 const ISO_DATE = /\d{4}-\d{2}-\d{2}/
 
@@ -313,6 +329,47 @@ export function workflowJobTimeoutRule(input: ConventionInput): Rule {
   }
 }
 
+/**
+ * `psql` commits each statement as it goes. A run step that loses
+ * `--single-transaction` applies whatever ran before the failure, and what
+ * survives is exactly the statements no constraint stopped -- which is silent,
+ * because the statements that did fail printed errors and `psql` still exits 0.
+ *
+ * ADR 0015 established the flag for migrations, where re-application errors
+ * loudly. This rule covers every run step, including the seed, where
+ * re-application duplicates rows instead. That record also states the trigger
+ * for narrowing this rule, which is deliberately not built here: no run step
+ * yet issues a statement PostgreSQL refuses inside a transaction block.
+ *
+ * The subjects come from `collectInput`, which reads the README's shell-tagged
+ * blocks. The rule's coverage therefore rests on a fence's info string, and the
+ * vacuity contract only catches losing *every* subject: retag one block of two
+ * and this passes over the remaining one. That limit is recorded in ADR 0016
+ * rather than papered over here.
+ */
+export function runStepSingleTransactionRule(input: ConventionInput): Rule {
+  return {
+    name: 'run-step-single-transaction',
+    expectsSubjects: true,
+    check(): Outcome {
+      const violations: Violation[] = []
+
+      for (const command of input.runStepCommands) {
+        if (!command.text.includes(SINGLE_TRANSACTION)) {
+          violations.push({
+            where: `README.md line ${command.line}`,
+            detail: `required: ${SINGLE_TRANSACTION}\n        command:  ${command.text}`,
+          })
+        }
+      }
+
+      const subjects = input.runStepCommands.length
+      if (violations.length > 0) return { status: 'fail', subjects, violations }
+      return { status: 'pass', subjects }
+    },
+  }
+}
+
 export function createRules(input: ConventionInput): Rule[] {
   return [
     readmeStatusDateRule(input),
@@ -320,6 +377,7 @@ export function createRules(input: ConventionInput): Rule[] {
     migrationHasDownRule(input),
     featureHasTestRule(input),
     workflowJobTimeoutRule(input),
+    runStepSingleTransactionRule(input),
   ]
 }
 
@@ -564,6 +622,81 @@ function readWorkflowJobs(root: string): WorkflowJob[] {
   return jobs
 }
 
+/**
+ * The fence info strings that mean "commands to run". Bare and ```json fences
+ * are excluded because they carry output examples, and a transcript line such
+ * as `psql: error: connection refused` would otherwise become a subject the
+ * rule then failed on.
+ *
+ * Five rather than one: every shell block in README.md is tagged `sh` today,
+ * but nothing enforces that, and a block retagged ```bash is a likelier
+ * accident than an alternate fence marker. Widening shrinks that dependency
+ * without removing it -- a block tagged outside this set is still invisible,
+ * which ADR 0016 records as this rule's limit rather than hiding.
+ */
+const SHELL_INFO_STRINGS = new Set(['sh', 'bash', 'shell', 'zsh', 'console'])
+
+const FENCE = /^```(\S*)\s*$/
+/** `psql` as a whole word, so `postgresql` and `psqlrc` are not invocations. */
+const PSQL = /\bpsql\b/
+
+/**
+ * Every `psql` invocation in README.md's shell-tagged blocks.
+ *
+ * Continuations are joined before matching. A line-based reader fails in both
+ * directions on the same file: given a command whose flag sits on the next
+ * line it reports a violation that is not there, and given a continuation line
+ * carrying the flag but not the command it finds no subject at all.
+ *
+ * The line number reported is where the command begins, which is the line a
+ * reader has to edit.
+ */
+function readRunStepCommands(readme: string | null): RunStepCommand[] {
+  if (readme === null) return []
+
+  const commands: RunStepCommand[] = []
+  const lines = readme.split('\n')
+  let shell = false
+  let fenced = false
+  let pending: RunStepCommand | null = null
+
+  for (const [index, line] of lines.entries()) {
+    const info = FENCE.exec(line)?.[1]
+    if (info !== undefined) {
+      // A closing fence carries no info string, so entering and leaving are the
+      // same branch; `fenced` is what says which of the two this one is.
+      shell = fenced ? false : SHELL_INFO_STRINGS.has(info)
+      fenced = !fenced
+      pending = null
+      continue
+    }
+    if (!shell) continue
+
+    const continues = line.endsWith('\\')
+    const text = (continues ? line.slice(0, -1) : line).trim()
+
+    if (pending !== null) {
+      pending.text = `${pending.text} ${text}`.trim()
+      if (!continues) pending = null
+      continue
+    }
+
+    if (!PSQL.test(text) && !continues) continue
+
+    const command: RunStepCommand = { line: index + 1, text }
+    if (continues) {
+      pending = command
+      commands.push(command)
+      continue
+    }
+    commands.push(command)
+  }
+
+  // A continued command is collected before its later lines are read, so
+  // whether it invokes psql is only knowable once it is whole.
+  return commands.filter((command) => PSQL.test(command.text))
+}
+
 export function collectInput(root: string, requireHistory: boolean): ConventionInput {
   let readme: string | null
   try {
@@ -611,6 +744,7 @@ export function collectInput(root: string, requireHistory: boolean): ConventionI
     migrations: readMigrations(root),
     features: readFeatures(root),
     workflowJobs: readWorkflowJobs(root),
+    runStepCommands: readRunStepCommands(readme),
     allowedIdentity: (gitOrNull(root, ['config', '--get', 'user.email']) ?? '').trim(),
     requireHistory,
   }

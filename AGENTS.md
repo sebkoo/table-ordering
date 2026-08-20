@@ -52,6 +52,10 @@ that creates the thing it governs.
   expects and fails when one is absent. Zero matched lines is a failure: a
   pattern that matches nothing reports no violations, and a check that inspected
   nothing has established nothing.
+- Every `psql` invocation in the run steps carries `--single-transaction`.
+  Without it `psql` commits statement by statement, so a batch that fails
+  partway leaves behind exactly the statements no constraint stopped, and exits
+  0 having said so only on stderr.
 
 ## Change size
 

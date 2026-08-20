@@ -21,8 +21,10 @@ import {
   hasFailure,
   migrationHasDownRule,
   type Rule,
+  type RunStepCommand,
   readmeStatusDateRule,
   runRules,
+  runStepSingleTransactionRule,
   workflowJobTimeoutRule,
 } from '../check-conventions.ts'
 
@@ -57,6 +59,7 @@ function input(overrides: Partial<ConventionInput> = {}): ConventionInput {
       },
     ],
     workflowJobs: [{ path: '.github/workflows/ci.yml', job: 'verify', timeoutMinutes: 10 }],
+    runStepCommands: [{ line: 12, text: 'psql -U u -d d --single-transaction < 0001.up.sql' }],
     allowedIdentity: IDENTITY,
     requireHistory: false,
     ...overrides,
@@ -218,20 +221,20 @@ describe('the report', () => {
   // so they are null together or not at all, and an unborn repository's README
   // is untracked rather than modified. The file rules read the working tree, so
   // they evaluate before the first commit.
-  it('summarises a repository with no commits as two skips and three passes', () => {
+  it('summarises a repository with no commits as two skips and four passes', () => {
     const reports = runRules(
       createRules(input({ commitMessages: null, readmeCommitDates: null, readmeDirty: false })),
     )
     const text = formatReports(reports)
-    expect(text).toContain('5 checks: 3 PASS, 0 FAIL, 2 SKIP')
+    expect(text).toContain('6 checks: 4 PASS, 0 FAIL, 2 SKIP')
     expect(text).toContain('readme-status-date')
     expect(text).toContain('commit-message-policy')
     expect(hasFailure(reports)).toBe(false)
   })
 
-  it('summarises a clean committed tree as five passes', () => {
+  it('summarises a clean committed tree as six passes', () => {
     const reports = runRules(createRules(input({ requireHistory: true })))
-    expect(formatReports(reports)).toContain('5 checks: 5 PASS, 0 FAIL, 0 SKIP')
+    expect(formatReports(reports)).toContain('6 checks: 6 PASS, 0 FAIL, 0 SKIP')
     expect(hasFailure(reports)).toBe(false)
   })
 
@@ -246,13 +249,14 @@ describe('the report', () => {
     }
   })
 
-  it('ships exactly the five rules', () => {
+  it('ships exactly the six rules', () => {
     expect(createRules(input()).map((rule) => rule.name)).toEqual([
       'readme-status-date',
       'commit-message-policy',
       'migration-has-down',
       'feature-has-test',
       'workflow-job-timeout',
+      'run-step-single-transaction',
     ])
   })
 })
@@ -284,6 +288,145 @@ function commitAll(dir: string, message: string, when?: string): void {
   git(dir, ['add', '-A'], env)
   git(dir, ['commit', '--quiet', '-m', message], env)
 }
+
+// ---------------------------------------------------------------------------
+
+describe('run-step-single-transaction', () => {
+  function withCommands(...texts: string[]): Rule {
+    return runStepSingleTransactionRule(
+      input({ runStepCommands: texts.map((text, index) => ({ line: index + 1, text })) }),
+    )
+  }
+
+  it('passes an invocation that carries the flag', () => {
+    expect(verdictOf(withCommands('psql -U u -d d --single-transaction < 0001.up.sql'))).toBe(
+      'PASS',
+    )
+  })
+
+  it('fails one that does not, printing the flag beside the command it is missing from', () => {
+    const outcome = withCommands("psql -U u -d d <<'SQL'").check()
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+    expect(outcome.violations).toEqual([
+      {
+        where: 'README.md line 1',
+        detail: "required: --single-transaction\n        command:  psql -U u -d d <<'SQL'",
+      },
+    ])
+  })
+
+  it('names only the offending invocation when others comply', () => {
+    const outcome = withCommands(
+      'psql -U u -d d --single-transaction < 0001.up.sql',
+      "psql -U u -d d <<'SQL'",
+    ).check()
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+    expect(outcome.subjects).toBe(2)
+    expect(outcome.violations.map((violation) => violation.where)).toEqual(['README.md line 2'])
+  })
+
+  it('fails as vacuous when no run step invokes psql at all', () => {
+    expect(verdictOf(runStepSingleTransactionRule(input({ runStepCommands: [] })))).toBe('FAIL')
+  })
+})
+
+describe('the run steps a README actually carries', () => {
+  function readmeWith(body: string): RunStepCommand[] {
+    const dir = newRepo()
+    writeFileSync(join(dir, 'README.md'), body, 'utf8')
+    return collectInput(dir, false).runStepCommands
+  }
+
+  const HEREDOC = "docker compose exec -T postgres psql -U u -d d <<'SQL'"
+  const REDIRECT = 'psql -U u -d d --single-transaction < 0001.up.sql'
+
+  it('reads both invocation forms the run steps are written in', () => {
+    expect(
+      readmeWith(
+        `\`\`\`sh\n${REDIRECT}\n\`\`\`\n\n\`\`\`sh\n${HEREDOC}\ninsert into x;\nSQL\n\`\`\`\n`,
+      ),
+    ).toEqual([
+      { line: 2, text: REDIRECT },
+      { line: 6, text: HEREDOC },
+    ])
+  })
+
+  it('joins a continuation, so a flag on the next line still belongs to the command', () => {
+    const commands = readmeWith('```sh\npsql -U u -d d \\\n  --single-transaction < x.sql\n```\n')
+    expect(commands).toEqual([{ line: 2, text: 'psql -U u -d d --single-transaction < x.sql' }])
+    expect(verdictOf(runStepSingleTransactionRule(input({ runStepCommands: commands })))).toBe(
+      'PASS',
+    )
+  })
+
+  it('joins a continuation that begins before the command itself', () => {
+    expect(
+      readmeWith(
+        '```sh\ndocker compose exec -T postgres \\\n  psql -U u -d d --single-transaction < x.sql\n```\n',
+      ),
+    ).toEqual([
+      {
+        line: 2,
+        text: 'docker compose exec -T postgres psql -U u -d d --single-transaction < x.sql',
+      },
+    ])
+  })
+
+  it('reads every shell info string, not only sh', () => {
+    for (const info of ['sh', 'bash', 'shell', 'zsh', 'console']) {
+      expect(readmeWith(`\`\`\`${info}\n${REDIRECT}\n\`\`\`\n`)).toHaveLength(1)
+    }
+  })
+
+  it('does not read a fence that carries output rather than commands', () => {
+    expect(readmeWith('```\npsql: error: connection refused\n```\n')).toEqual([])
+    expect(readmeWith('```json\n{"psql": true}\n```\n')).toEqual([])
+  })
+
+  it('does not read a mention of psql in prose', () => {
+    expect(readmeWith('There is no runner, so this is `psql` reading each file.\n')).toEqual([])
+  })
+
+  it('does not read psql inside a longer word', () => {
+    expect(readmeWith('```sh\ncat postgresql.conf .psqlrc\n```\n')).toEqual([])
+  })
+
+  it('reports the line the command begins on, which is the line to edit', () => {
+    expect(readmeWith(`# Title\n\nSome prose.\n\n\`\`\`sh\n${HEREDOC}\nSQL\n\`\`\`\n`)).toEqual([
+      { line: 6, text: HEREDOC },
+    ])
+  })
+
+  // This is the limit ADR 0016 records, asserted rather than described. The
+  // vacuity contract catches losing every subject; it cannot catch losing one.
+  it('goes blind on a retagged block, and the contract only catches losing all of them', () => {
+    const blocks = (first: string, second: string): string =>
+      `\`\`\`${first}\n${REDIRECT}\n\`\`\`\n\n\`\`\`${second}\n${HEREDOC}\nSQL\n\`\`\`\n`
+
+    expect(readmeWith(blocks('sh', 'sh'))).toHaveLength(2)
+
+    // Both retagged: no subjects at all, and the vacuity contract fails it.
+    expect(readmeWith(blocks('text', 'text'))).toEqual([])
+
+    // Retag the block that complies and the violation is still caught.
+    const violating = readmeWith(blocks('text', 'sh'))
+    expect(violating).toHaveLength(1)
+    expect(verdictOf(runStepSingleTransactionRule(input({ runStepCommands: violating })))).toBe(
+      'FAIL',
+    )
+
+    // Retag the block that violates and the rule passes over the one that is
+    // left, silently, having inspected half the run steps. That is the limit
+    // ADR 0016 records: the vacuity contract catches total blindness only.
+    const compliant = readmeWith(blocks('sh', 'text'))
+    expect(compliant).toHaveLength(1)
+    expect(verdictOf(runStepSingleTransactionRule(input({ runStepCommands: compliant })))).toBe(
+      'PASS',
+    )
+  })
+})
 
 describe('collectInput', () => {
   it('maps an unborn repository to null, not to an empty array', () => {
@@ -382,7 +525,7 @@ describe('collectInput', () => {
     const dir = newRepo()
     expect(collectInput(dir, true).requireHistory).toBe(true)
 
-    // Named rather than counted: the two file rules also fail on this empty
+    // Named rather than counted: the file rules also fail on this empty
     // repository, but they fail as vacuous, which would let this assertion go
     // on passing for a reason that has nothing to do with --require-history.
     const verdicts = new Map(
@@ -402,11 +545,25 @@ describe('collectInput', () => {
  * so getting that order wrong makes the check unfailable exactly where it is
  * supposed to be strictest. These cases drive the real repository shape.
  */
+/**
+ * The run-step rule reads the README, so a fixture repository needs a real run
+ * step or that rule fails as vacuous and the verdict arrays below stop being
+ * about history at all.
+ */
+const BOOTSTRAP_README = `# Title
+
+**Status:** 2026-08-19 · x.
+
+\`\`\`sh
+psql -U u -d d --single-transaction < 0001.up.sql
+\`\`\`
+`
+
 describe('an unborn repository whose README.md is untracked', () => {
   /** A fresh clone before its first commit: files on disk, nothing in history. */
   function bootstrapRepo(): string {
     const dir = newRepo()
-    writeFileSync(join(dir, 'README.md'), '# Title\n\n**Status:** 2026-08-19 · x.\n', 'utf8')
+    writeFileSync(join(dir, 'README.md'), BOOTSTRAP_README, 'utf8')
     mkdirSync(join(dir, 'services', 'api', 'migrations'), { recursive: true })
     writeFileSync(join(dir, 'services', 'api', 'migrations', '1.up.sql'), 'create table x ();\n')
     writeFileSync(join(dir, 'services', 'api', 'migrations', '1.down.sql'), 'drop table x;\n')
@@ -431,6 +588,7 @@ describe('an unborn repository whose README.md is untracked', () => {
       'PASS',
       'PASS',
       'PASS',
+      'PASS',
     ])
     const readme = reports[0]?.outcome
     expect(readme?.status).toBe('skip')
@@ -444,6 +602,7 @@ describe('an unborn repository whose README.md is untracked', () => {
     expect(reports.map((report) => report.verdict)).toEqual([
       'FAIL',
       'FAIL',
+      'PASS',
       'PASS',
       'PASS',
       'PASS',
