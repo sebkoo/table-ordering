@@ -151,9 +151,9 @@ it is started.
 | Tenant schema | Done |
 | Guest menu, over HTTP | Done |
 | A page the guest's phone loads | Done |
-| Row-level security, so scope is not the query's job | Planned |
 | A table's own code, on the guest's page | Done |
 | Order submission that tolerates retries | Planned |
+| Row-level security, so scope is not the query's job | Planned |
 | Kitchen board | Planned |
 | Payment, as an option rather than a requirement | Planned |
 
@@ -327,6 +327,7 @@ each with the alternatives that were rejected and why.
 - [0014 Print a table's own code, and make it the guest's URL](docs/adr/0014-print-a-tables-own-code-and-make-it-the-guests-url.md)
 - [0015 Apply the second migration by hand, and defer the runner to a named trigger](docs/adr/0015-apply-the-second-migration-by-hand.md)
 - [0016 Make every run step atomic, and check the flag rather than restate it](docs/adr/0016-make-every-run-step-atomic.md)
+- [0017 Check the procedure by running it, not by matching its text](docs/adr/0017-check-the-procedure-by-running-it.md)
 
 ## Known limitations
 

@@ -26,9 +26,13 @@ Write it before touching anything, and treat approving it as the lock.
 3. **The file surface**, exact paths. A path whose inclusion depends on
    something not yet known is declared conditional, with both branches named and
    the observation that decides between them stated.
-4. **The metadata surface** — the repository description and topics — stated
-   even when nothing changes, with the reason. Metadata passes through no gate
-   this repository has, so a declaration is the only thing that holds it.
+4. **The metadata surface** — the repository description and topics — quoted
+   verbatim from the server, with the command that read them, and stated even
+   when nothing changes. Read it before the declaration locks. Saying
+   "unchanged" without carrying the text leaves nothing to compare against, and
+   a string read fresh at push time compares the server with itself. Metadata
+   passes through no gate this repository has, so the declaration is the only
+   thing that holds it.
 5. **The predicted check output**: per-check verdicts, subject counts, and every
    place in the tree that asserts one of those numbers or strings.
 6. **The records due**: any decision the committed records schedule at a subject
@@ -57,18 +61,22 @@ Write it before touching anything, and treat approving it as the lock.
    path that was declared and proved unnecessary.
 3. The checks pass, and match the prediction. A difference from the prediction
    is reported whether or not the checks are green.
-4. A fresh sibling clone installs, checks, and runs the differential
-   commit-message hook probe: a message the policy rejects is rejected there,
-   and a clean one is accepted.
-5. The whole diff is read against the declaration, as `AGENTS.md` step 5 says.
+4. The whole diff is read against the declaration, as `AGENTS.md` step 5 says.
    Obligations the declaration names stay: "does an acceptance condition need
    this" is not the test, or the records and invariants a change owes get read
    as slack and deleted.
-6. Immediately before `git commit`, `date -u +%F` is compared with `README.md`'s
+5. Immediately before `git commit`, `date -u +%F` is compared with `README.md`'s
    status line, which carries the UTC date of the commit about to be made. A
    mismatch is fixed in the working tree — never by amending afterwards, because
    an amend rewrites a commit the hook has already accepted.
-7. Commit. The hook runs; a rejection stops the run and the message is fixed.
+6. Commit. The hook runs; a rejection stops the run and the message is fixed.
+7. A fresh sibling clone of the commit just made installs, checks, and runs the
+   differential commit-message hook probe: a message the policy rejects is
+   rejected there, and a clean one is accepted. `git rev-parse HEAD` in the
+   clone is printed beside the revision under test, and the two are equal. A
+   clone taken before the commit holds the parent, and nothing in its output
+   says which it holds: a clone is clean whatever tree it came from, and the
+   rule count is the same either way.
 
 ## Pushing
 
@@ -89,6 +97,10 @@ the change.
 
    Pass the flag. Without it, a machine with no `gh` prints skips and exits 0 —
    a check that passed by checking nothing.
+
+   The description and topics are transcribed from the declaration. Read here
+   from the server instead, they would compare the server with itself and pass
+   whatever it holds.
 4. Read its three lines, not only its exit code: they name what happened. The
    third confirms the metadata against the declaration, including when the
    declaration said nothing changes.
