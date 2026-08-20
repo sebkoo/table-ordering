@@ -282,11 +282,11 @@ pnpm check-push --revision "$(git rev-parse HEAD)" \
   --require-environment
 ```
 
-Run against the push of `7a1d0a5`, it printed:
+Run against the push of `094baff`, it printed:
 
 ```
-push-arrived ....... PASS  origin holds 7a1d0a55f55fae8cda4eb672ec5ded9d58591656
-run-verified ....... PASS  run 32298949382, 10 verdict lines, all PASS
+push-arrived ....... PASS  origin holds 094baff17ac659eb784cff872a24f1936afbf582
+run-verified ....... PASS  run 32416115120, 12 verdict lines, all PASS, verify: 10.7s in 52s of jobs
 metadata-declared .. PASS  the description and 11 topics are as declared
 ```
 
@@ -298,6 +298,11 @@ skipped reads `success`. And the description and topics are compared against
 what you pass in rather than against a file in this repository, because a stored
 copy of the expectation drifts from the real one with nothing to notice; the
 repository's description and topics otherwise pass through no check at all.
+
+The two timings come out of what the check had already fetched. `verify`'s own
+elapsed figure is in the log that is read to count those verdict lines, and the
+job's duration is one call from the run that was already found. Both were being
+looked up by hand after every push.
 
 It needs `gh`. Without it the last two lines skip and name what is missing, and
 `--require-environment` turns those skips into failures, which is what the

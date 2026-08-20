@@ -59,6 +59,9 @@ that creates the thing it governs.
   the two equal where full equality would not. A pair differing at the first
   character is told apart by every truncation, and so establishes nothing about
   how much of the value was compared.
+- A capture framed as history stays as written while only its values have moved.
+  When its shape has moved, the label dates nothing a reader can use, and it is
+  recaptured or removed.
 - Every `psql` invocation in the run steps carries `--single-transaction`.
   Without it `psql` commits statement by statement, so a batch that fails
   partway leaves behind exactly the statements no constraint stopped, and exits

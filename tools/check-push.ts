@@ -58,6 +58,20 @@ export type Options = {
   requireEnvironment: boolean
 }
 
+/**
+ * A check that found differences. The count is on the line and the differences
+ * are under it, so a reader sees how many before reading any of them.
+ */
+function fail(name: string, violations: Violation[]): CheckReport {
+  const count = violations.length
+  return {
+    name,
+    verdict: 'FAIL',
+    detail: `${count} difference${count === 1 ? '' : 's'} from the declaration`,
+    violations,
+  }
+}
+
 const REMOTE = 'origin'
 const BRANCH = 'main'
 
@@ -121,7 +135,41 @@ export function verdictLines(log: string): VerdictLine[] {
 }
 
 const COUNTS = /^\s*(\d+) checks: (\d+) PASS, (\d+) FAIL, (\d+) SKIP$/
-const SUMMARY = /^verify: (PASS|FAIL) {2}\S+(?: {2}\(skipped: (.*)\))?$/
+const SUMMARY = /^verify: (PASS|FAIL) {2}(\S+)(?: {2}\(skipped: (.*)\))?$/
+
+/**
+ * `verify`'s closing line, parsed once and read twice: for the verdict and the
+ * skipped clause this file compares, and for the elapsed figure it reports.
+ *
+ * That figure was always inside this pattern -- `\S+` matched it and threw it
+ * away. Capturing it adds no dependency on `verify`'s output format that this
+ * file did not already have, and none it does not already fail on: a log whose
+ * summary line does not match is a violation today, before any of this. Both
+ * ends live in `tools/`, so a change to the format and the change to this
+ * pattern land in one commit.
+ */
+type Summary = {
+  verdict: Verdict
+  /** What `verify` printed for its own elapsed time. */
+  elapsed: string
+  /** The steps it named as skipped, when it named any. */
+  skipped?: string
+  /** The line as it stands, for a violation to quote back. */
+  line: string
+}
+
+function parseSummary(log: string): Summary | null {
+  const line = messages(log).find((message) => SUMMARY.test(message))
+  if (line === undefined) return null
+
+  const match = SUMMARY.exec(line)
+  return {
+    verdict: (match?.[1] ?? '') as Verdict,
+    elapsed: match?.[2] ?? '',
+    ...(match?.[3] === undefined ? {} : { skipped: match[3] }),
+    line: line.trim(),
+  }
+}
 
 /**
  * The step names a green log must carry one verdict line each for, taken from
@@ -173,7 +221,7 @@ export function runVerifiedViolations(log: RunLog, expected: readonly string[]):
     }
   }
 
-  violations.push(...countsViolations(log.text), ...summaryViolations(log.text))
+  violations.push(...countsViolations(log.text), ...summaryViolations(parseSummary(log.text)))
   return violations
 }
 
@@ -195,19 +243,97 @@ function countsViolations(text: string): Violation[] {
   return []
 }
 
-function summaryViolations(text: string): Violation[] {
-  const line = messages(text).find((message) => SUMMARY.test(message))
-  if (line === undefined) return [{ where: 'the run', detail: 'no verify summary line in the log' }]
+function summaryViolations(summary: Summary | null): Violation[] {
+  if (summary === null) return [{ where: 'the run', detail: 'no verify summary line in the log' }]
 
-  const match = SUMMARY.exec(line)
   const violations: Violation[] = []
-  if (match?.[1] !== 'PASS') violations.push({ where: 'the run', detail: line.trim() })
+  if (summary.verdict !== 'PASS') violations.push({ where: 'the run', detail: summary.line })
   // The summary names what it skipped. A run that skipped anything is a run
   // that reported on less than it was asked to, whatever its exit code said.
-  if (match?.[2] !== undefined) {
-    violations.push({ where: 'the run', detail: `steps were skipped: ${match[2]}` })
+  if (summary.skipped !== undefined) {
+    violations.push({ where: 'the run', detail: `steps were skipped: ${summary.skipped}` })
   }
   return violations
+}
+
+/**
+ * The timestamps GitHub gives a job of a run that has completed.
+ */
+export type JobTimes = { startedAt: string; completedAt: string }
+
+/** How long the run's jobs took, or why that could not be worked out. */
+type Span = { ok: true; seconds: number } | { ok: false; reason: string }
+
+/**
+ * Earliest start to latest completion, in whole seconds.
+ *
+ * The span rather than the first job's own duration, because a run may hold
+ * more than one and picking one of them would be a branch on a count nothing
+ * here has observed. With `ci.yml`'s single job the two are the same figure.
+ *
+ * The figure is reported in seconds and never in `gh`'s own `2m27s` form.
+ * Mirroring that would tie this line to another project's display format, which
+ * nothing keeps in step with this one; seconds are tied to nothing, and below a
+ * minute the two read identically anyway.
+ */
+export function jobSpanSeconds(jobs: readonly JobTimes[]): Span {
+  if (jobs.length === 0) return { ok: false, reason: 'gh reported no jobs for this run' }
+
+  for (const job of jobs) {
+    if (Number.isNaN(Date.parse(job.startedAt)) || Number.isNaN(Date.parse(job.completedAt))) {
+      return {
+        ok: false,
+        reason: `a job timestamp gh returned is not a date: ${job.startedAt} to ${job.completedAt}`,
+      }
+    }
+  }
+
+  const started = jobs.map((job) => Date.parse(job.startedAt))
+  const finished = jobs.map((job) => Date.parse(job.completedAt))
+  return { ok: true, seconds: Math.round((Math.max(...finished) - Math.min(...started)) / 1000) }
+}
+
+/**
+ * The whole `run-verified` line: the differences from the declaration, and --
+ * when there are none -- the two timings the log and the job list already
+ * carried.
+ *
+ * Both figures were being fetched by hand after every commit, from sources this
+ * check had already read. Neither is optional on a PASS: a line that quietly
+ * left one out would send a reader back to the log without telling them to, so
+ * a figure that cannot be had is a violation and the line is a FAIL naming why.
+ */
+export function runVerifiedReport(
+  databaseId: number,
+  log: RunLog,
+  jobs: readonly JobTimes[],
+  expected: readonly string[],
+): CheckReport {
+  // First, so that everything below can read the text. A log that could not be
+  // fetched is one violation naming that, which is what the call already makes.
+  if (!log.read) return fail('run-verified', runVerifiedViolations(log, expected))
+
+  const violations = runVerifiedViolations(log, expected)
+  const span = jobSpanSeconds(jobs)
+  if (!span.ok) violations.push({ where: `run ${databaseId}`, detail: span.reason })
+
+  // A log with no summary line has already produced its own violation above, so
+  // the middle disjunct never decides this on its own. It is written out because
+  // the alternative is a fallback that prints a figure nothing read.
+  const summary = parseSummary(log.text)
+  if (violations.length > 0 || summary === null || !span.ok) {
+    return fail('run-verified', violations)
+  }
+
+  const lines = verdictLines(log.text).length
+  return {
+    name: 'run-verified',
+    verdict: 'PASS',
+    detail:
+      `run ${databaseId}, ${lines} verdict lines, all PASS, ` +
+      `verify: ${summary.elapsed} in ${span.seconds}s of jobs`,
+    violations: [],
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -434,16 +560,32 @@ function checkRun(revision: string): CheckReport {
       ? { read: true, text: viewed.stdout }
       : { read: false, reason: viewed.stderr.trim() || `gh run view exited ${viewed.status}` }
 
-  const violations = runVerifiedViolations(log, expectedStepNames())
-  if (violations.length > 0) return fail('run-verified', violations)
-
-  const read = log.read ? verdictLines(log.text).length : 0
-  return {
-    name: 'run-verified',
-    verdict: 'PASS',
-    detail: `run ${run.databaseId}, ${read} verdict lines, all PASS`,
-    violations: [],
+  // The fourth `gh` call, and the reason it is not three. The job's duration is
+  // reported so that nobody fetches it by hand, and the two sources already in
+  // hand both give the wrong number. On run 32416115120, whose job GitHub
+  // reports as 52s: the run's own startedAt-to-updatedAt, in the JSON `gh run
+  // list` already returned, is 57s, because it counts the queueing before the
+  // job and the bookkeeping after it; the log's first-to-last timestamp is
+  // 48.5s, because the log begins once the runner is already up. Only the job's
+  // own pair reproduces what GitHub prints, and a figure close to the published
+  // one but not equal to it is worse than no figure.
+  const listedJobs = gh(['run', 'view', String(run.databaseId), '--json', 'jobs'])
+  if (listedJobs.status !== 0) {
+    return fail('run-verified', [
+      { where: 'gh run view --json jobs', detail: listedJobs.stderr.trim() },
+    ])
   }
+
+  let jobs: JobTimes[]
+  try {
+    jobs = (JSON.parse(listedJobs.stdout) as { jobs: JobTimes[] | null }).jobs ?? []
+  } catch (error) {
+    return fail('run-verified', [
+      { where: 'gh run view --json jobs', detail: `unreadable: ${String(error)}` },
+    ])
+  }
+
+  return runVerifiedReport(run.databaseId, log, jobs, expectedStepNames())
 }
 
 function checkMetadata(expected: Metadata): CheckReport {
@@ -494,16 +636,6 @@ function checkPush(revision: string, requireEnvironment: boolean): CheckReport {
     verdict: 'PASS',
     detail: `${REMOTE} holds ${revision}`,
     violations: [],
-  }
-}
-
-function fail(name: string, violations: Violation[]): CheckReport {
-  const count = violations.length
-  return {
-    name,
-    verdict: 'FAIL',
-    detail: `${count} difference${count === 1 ? '' : 's'} from the declaration`,
-    violations,
   }
 }
 

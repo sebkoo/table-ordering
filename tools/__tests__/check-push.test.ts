@@ -27,10 +27,13 @@ import {
   exitCode,
   expectedStepNames,
   formatCheck,
+  type JobTimes,
+  jobSpanSeconds,
   metadataViolations,
   parseArgs,
   pushArrivedViolations,
   type RunLog,
+  runVerifiedReport,
   runVerifiedViolations,
   skipReport,
   verdictLines,
@@ -54,6 +57,21 @@ verify	Run pnpm verify --require-environment	2026-08-19T20:33:26.9746195Z   feat
 verify	Run pnpm verify --require-environment	2026-08-19T20:33:26.9747413Z   4 checks: 4 PASS, 0 FAIL, 0 SKIP
 verify	Run pnpm verify --require-environment	2026-08-19T20:33:26.9782930Z 
 verify	Run pnpm verify --require-environment	2026-08-19T20:33:26.9784627Z verify: PASS  8.4s`
+
+/**
+ * The job times of that same run, read from `gh run view 32298949382 --json
+ * jobs`. One run's log beside one run's jobs: a pair the collector really
+ * emits, rather than two arguments that merely typecheck together.
+ *
+ * 2m27s, which is 147 seconds. That run predates ADR 0013, so it is also the
+ * only fixture here that carries a duration over a minute -- the case where
+ * this file's seconds and `gh`'s own display diverge in form while naming the
+ * same duration.
+ */
+const GREEN_RUN = 32298949382
+const GREEN_JOBS: JobTimes[] = [
+  { startedAt: '2026-08-19T20:31:06Z', completedAt: '2026-08-19T20:33:33Z' },
+]
 
 const EXPECTED = expectedStepNames()
 
@@ -194,6 +212,105 @@ describe('the log of the run for a revision', () => {
     expect(verdictLines('lint ............. PASS  0.1s')).toEqual([
       { name: 'lint', verdict: 'PASS', detail: '0.1s', indented: false },
     ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+/**
+ * What the line says when it passes, which until now was written down in
+ * README and nowhere else. Both figures were already inside things this check
+ * reads -- the elapsed inside the pattern that validates the summary line, the
+ * job span one call from the run it had already found -- and both were being
+ * fetched by hand after every commit instead.
+ */
+describe('the timings a passing run reports', () => {
+  it('carries the run, the line count, the elapsed and the job span', () => {
+    const report = runVerifiedReport(GREEN_RUN, read(GREEN), GREEN_JOBS, EXPECTED)
+
+    expect(report.verdict).toBe('PASS')
+    expect(report.detail).toBe(
+      'run 32298949382, 10 verdict lines, all PASS, verify: 8.4s in 147s of jobs',
+    )
+  })
+
+  // The elapsed is read from the log rather than assumed. The rewritten figure
+  // keeps the original's length and differs at its last character, so neither a
+  // length check nor a comparison truncated anywhere tells the two apart.
+  it('takes the elapsed from the log it was given', () => {
+    const slower = withLine(GREEN, 'verify: PASS  8.4s', 'verify: PASS  8.5s')
+
+    expect(runVerifiedReport(GREEN_RUN, read(slower), GREEN_JOBS, EXPECTED).detail).toBe(
+      'run 32298949382, 10 verdict lines, all PASS, verify: 8.5s in 147s of jobs',
+    )
+  })
+
+  // Two integer digits, which is what a real run prints today. A pattern
+  // assuming one would pass the fixture above and fail every current log.
+  it('reads an elapsed figure wider than the one in the fixture', () => {
+    const wider = withLine(GREEN, 'verify: PASS  8.4s', 'verify: PASS  10.7s')
+
+    expect(runVerifiedReport(GREEN_RUN, read(wider), GREEN_JOBS, EXPECTED).detail).toBe(
+      'run 32298949382, 10 verdict lines, all PASS, verify: 10.7s in 147s of jobs',
+    )
+  })
+
+  // A figure that cannot be had is a violation, never a clause left off a PASS
+  // line. The line would otherwise read as a complete report of a green run.
+  it('fails when gh reported no jobs, rather than dropping the span', () => {
+    const report = runVerifiedReport(GREEN_RUN, read(GREEN), [], EXPECTED)
+
+    expect(report.verdict).toBe('FAIL')
+    expect(details([...report.violations])).toEqual([
+      'run 32298949382: gh reported no jobs for this run',
+    ])
+  })
+
+  it('fails on a job timestamp that is not a date, naming both ends', () => {
+    const report = runVerifiedReport(
+      GREEN_RUN,
+      read(GREEN),
+      [{ startedAt: '2026-08-19T20:31:06Z', completedAt: '' }],
+      EXPECTED,
+    )
+
+    expect(details([...report.violations])).toEqual([
+      'run 32298949382: a job timestamp gh returned is not a date: 2026-08-19T20:31:06Z to ',
+    ])
+  })
+
+  // The span's violation joins the log's rather than replacing them. Reporting
+  // one at a time would send a reader round the loop twice.
+  it('reports a log difference and a span difference together', () => {
+    const missing = withLine(GREEN, 'lint ............. PASS  0.1s', 'lint built nothing')
+
+    expect(
+      details([...runVerifiedReport(GREEN_RUN, read(missing), [], EXPECTED).violations]),
+    ).toEqual([
+      'lint: no verdict line in the log',
+      'run 32298949382: gh reported no jobs for this run',
+    ])
+  })
+})
+
+describe('how long the jobs of a run took', () => {
+  // The pair gh itself reports as 2m27s, and the pair it reports as 52s.
+  it('measures a single job as gh reports it', () => {
+    expect(jobSpanSeconds(GREEN_JOBS)).toEqual({ ok: true, seconds: 147 })
+    expect(
+      jobSpanSeconds([{ startedAt: '2026-08-20T20:48:56Z', completedAt: '2026-08-20T20:49:48Z' }]),
+    ).toEqual({ ok: true, seconds: 52 })
+  })
+
+  // Earliest start to latest completion. The jobs overlap and neither one spans
+  // the whole: a first-job answer gives 30, a sum gives 70, and the run took 50.
+  it('spans every job, taking neither the first nor the sum', () => {
+    expect(
+      jobSpanSeconds([
+        { startedAt: '2026-08-20T20:00:00Z', completedAt: '2026-08-20T20:00:30Z' },
+        { startedAt: '2026-08-20T20:00:10Z', completedAt: '2026-08-20T20:00:50Z' },
+      ]),
+    ).toEqual({ ok: true, seconds: 50 })
   })
 })
 
