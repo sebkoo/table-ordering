@@ -52,6 +52,13 @@ that creates the thing it governs.
   expects and fails when one is absent. Zero matched lines is a failure: a
   pattern that matches nothing reports no violations, and a check that inspected
   nothing has established nothing.
+- A fixture that must show a comparison failing either places its difference
+  where a weaker comparison would not look — at the end of a value a truncation
+  would cut, inside equal lengths a length check would pass — or makes one value
+  a proper prefix of the other, so that a prefix or containment test would call
+  the two equal where full equality would not. A pair differing at the first
+  character is told apart by every truncation, and so establishes nothing about
+  how much of the value was compared.
 - Every `psql` invocation in the run steps carries `--single-transaction`.
   Without it `psql` commits statement by statement, so a batch that fails
   partway leaves behind exactly the statements no constraint stopped, and exits

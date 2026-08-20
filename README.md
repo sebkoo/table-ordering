@@ -367,6 +367,14 @@ each with the alternatives that were rejected and why.
   for a limited period, and after that the run cannot be verified this way. The
   check reports that the log could not be read, rather than reporting a run that
   printed nothing it recognised.
+- `pnpm check-push`'s CLI half is reached by no test. It picks the run for a
+  revision with a second whole-revision comparison, and the suite that pins the
+  first one cannot see it. The boundary between the tested half and this one is
+  drawn by a header comment and nothing else, so a comparison can cross it
+  without anything noticing.
+- `readme-status-date`'s subject count has never been observed independently of
+  `commit-message-policy`'s: every commit so far has touched README. The first
+  commit that leaves README alone is the first run that can tell them apart.
 - The convention checker carries six rules. The rest arrive with the code they
   govern, so that each rule shows up to a set of subjects that already comply.
 - `compose.yaml` carries development credentials inline, and starts a Redis

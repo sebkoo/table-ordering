@@ -12,6 +12,13 @@
  * That fixture is a verbatim capture, tab-separated prefixes, byte order mark,
  * escape sequences and all. A tidied-up one would let a parser pass here that
  * cannot read anything `gh run view --log` actually emits.
+ *
+ * The values these conditions compare are chosen to be able to fail. A pair
+ * differing at its first character is told apart by a comparison truncated
+ * anywhere, so it establishes nothing about how much of a value was compared.
+ * The pairs below differ at the last character, keep their lengths equal, or
+ * make one value a proper prefix of the other -- each aimed at the weaker
+ * comparison the real one would otherwise be mistaken for.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -141,6 +148,23 @@ describe('the log of the run for a revision', () => {
     ])
   })
 
+  // A run that failed. The step line is flipped as well as the summary because
+  // `verify` derives the second from the first: a log carrying `verify: FAIL`
+  // over six passing steps is not a log the collector can produce, and a fixture
+  // it cannot produce establishes nothing.
+  it('fails on a run whose summary says FAIL, naming the step and the run', () => {
+    const failed = withLine(
+      withLine(GREEN, 'lint ............. PASS  0.1s', 'lint ............. FAIL  0.1s'),
+      'verify: PASS  8.4s',
+      'verify: FAIL  8.4s',
+    )
+
+    expect(details(runVerifiedViolations(read(failed), EXPECTED))).toEqual([
+      'lint: FAIL  0.1s',
+      'the run: verify: FAIL  8.4s',
+    ])
+  })
+
   // A log that could not be fetched and a log that says nothing look identical
   // to a matcher. Reporting the first as the second sends a reader hunting a
   // broken check when GitHub has simply dropped the log.
@@ -177,7 +201,16 @@ describe('the log of the run for a revision', () => {
 
 describe('the revision the remote holds', () => {
   const declared = '7a1d0a55f55fae8cda4eb672ec5ded9d58591656'
-  const other = '8425908628daced177f50e23227e4cbcc626f165'
+  /**
+   * The same revision but for its last character, derived rather than typed out
+   * so that the shared prefix cannot decay under a later edit. Two revisions
+   * differing at their first character are told apart by a comparison truncated
+   * anywhere, which would leave the condition below green over one that reads
+   * seven characters of forty.
+   */
+  const other = `${declared.slice(0, -1)}7`
+  /** What `git rev-parse --short` prints: a proper prefix of the whole thing. */
+  const abbreviated = declared.slice(0, 7)
 
   it('passes when the remote holds the revision the declaration names', () => {
     expect(pushArrivedViolations(declared, { present: true, revision: declared })).toEqual([])
@@ -186,6 +219,20 @@ describe('the revision the remote holds', () => {
   it('fails when it holds another, naming both', () => {
     expect(details(pushArrivedViolations(declared, { present: true, revision: other }))).toEqual([
       `origin refs/heads/main: the remote holds ${other}, the declaration names ${declared}`,
+    ])
+  })
+
+  // The decision this fixture makes, rather than lets a test settle in silence:
+  // an abbreviation never matches. `git rev-parse` prints forty characters and
+  // the procedure says to pass what it printed, and a comparison lenient enough
+  // to accept a short revision is a prefix comparison -- which is the thing the
+  // fixture above exists to forbid. Resolving the argument before comparing it
+  // would be a third answer, neither taken here nor foreclosed.
+  it('fails on a revision the declaration abbreviated', () => {
+    expect(
+      details(pushArrivedViolations(abbreviated, { present: true, revision: declared })),
+    ).toEqual([
+      `origin refs/heads/main: the remote holds ${declared}, the declaration names ${abbreviated}`,
     ])
   })
 
@@ -210,21 +257,45 @@ describe('the repository metadata', () => {
     expect(metadataViolations({ ...declared, topics: ['vitest', 'pnpm'] }, declared)).toEqual([])
   })
 
-  it('fails on a description that differs, carrying both', () => {
-    const violations = metadataViolations({ ...declared, description: 'Something else.' }, declared)
+  // The declared description survives whole inside the remote's, so a
+  // `startsWith` or an `includes` calls the two equal. Asserting the whole
+  // message rather than its length makes the failure print the violation the
+  // weakened comparison should have produced.
+  it('fails on a description the remote extended, carrying both', () => {
+    const remote = `${declared.description} And more.`
 
-    expect(violations).toHaveLength(1)
-    expect(violations[0]?.where).toBe('description')
-    expect(violations[0]?.detail).toContain('declared: Self-hosted table-side ordering.')
-    expect(violations[0]?.detail).toContain('remote:   Something else.')
+    expect(details(metadataViolations({ ...declared, description: remote }, declared))).toEqual([
+      `description: declared: ${declared.description}\n        remote:   ${remote}`,
+    ])
   })
 
-  it('names a topic difference in both directions, absorbing neither', () => {
-    const violations = metadataViolations({ ...declared, topics: ['pnpm', 'svelte'] }, declared)
+  // The other direction, because one fixture cannot defeat both: a remote that
+  // extends the declared description survives a reversed prefix test, and one
+  // that truncates it survives the forward one.
+  it('fails on a description the remote truncated, carrying both', () => {
+    const remote = declared.description.slice(0, -10)
+
+    expect(details(metadataViolations({ ...declared, description: remote }, declared))).toEqual([
+      `description: declared: ${declared.description}\n        remote:   ${remote}`,
+    ])
+  })
+
+  // Two differences in each direction rather than one. With a single difference
+  // either way, an implementation reporting only the first would pass this and
+  // the condition would establish nothing about the loop. Equal lengths keep the
+  // length-for-content weakening defeated, and the shared topic keeps the set
+  // comparison exercised.
+  it('names every topic difference in both directions, absorbing none', () => {
+    const violations = metadataViolations(
+      { ...declared, topics: ['pnpm', 'svelte', 'astro'] },
+      { ...declared, topics: ['pnpm', 'vitest', 'docker'] },
+    )
 
     expect(details(violations)).toEqual([
       'topics: declared, and not on the remote: vitest',
+      'topics: declared, and not on the remote: docker',
       'topics: on the remote, and not declared: svelte',
+      'topics: on the remote, and not declared: astro',
     ])
   })
 })
