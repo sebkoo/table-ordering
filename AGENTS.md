@@ -73,6 +73,13 @@ that creates the thing it governs.
 - A capture framed as history stays as written while only its values have moved.
   When its shape has moved, the label dates nothing a reader can use, and it is
   recaptured or removed.
+- A repository check's inputs are the tree and the history. A value only the
+  machine can answer for — the operator's git configuration, their environment —
+  is not an input, and a check that takes one reports a fact about whoever ran
+  it rather than about the repository. Two things are not inputs of this kind: a
+  flag the caller passes, which is part of the question, and the identity a
+  commit-to-be will carry, which is part of that commit — before the object
+  exists there is nowhere else to ask.
 - Every `psql` invocation in the run steps carries `--single-transaction`.
   Without it `psql` commits statement by statement, so a batch that fails
   partway leaves behind exactly the statements no constraint stopped, and exits
@@ -124,9 +131,9 @@ caller, or with none, is a guess about a variation nobody has observed.
 - Subject line: lowercase, imperative, under 50 characters. No Conventional
   Commits prefix.
 - Body only where a decision needs explaining. Never describe the diff.
-- No trailers, with one exception: `Signed-off-by:` carrying the committer's
-  configured email address. Attribution trailers, session or trace URLs,
-  generated-by lines and emoji are rejected, whoever wrote them.
+- No trailers, with one exception: `Signed-off-by:` carrying the address the
+  commit is authored by, and no other. Attribution trailers, session or trace
+  URLs, generated-by lines and emoji are rejected, whoever wrote them.
 - The `commit-msg` hook enforces this on the way in, and `pnpm verify` checks
   the whole history. Never bypass either. If the hook rejects a message, fix
   the message.

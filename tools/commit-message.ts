@@ -8,6 +8,11 @@
  * Trailers are deny-by-default. The goal is that no agent ever appears as a
  * contributor, so the rule is an allow list of trailers rather than a list of
  * known agent names: a name list only rejects the agents someone thought of.
+ *
+ * The one allowed trailer is judged against the commit's own author, supplied by
+ * the caller. Both callers derive it from the commit rather than from the
+ * machine, which is what stops the same message being accepted on one and
+ * rejected on the other.
  */
 
 export type Violation = {
@@ -35,9 +40,12 @@ const PICTOGRAPH = /\p{Extended_Pictographic}|\p{Regional_Indicator}|\uFE0F|\u20
 
 /**
  * @param message the full commit message, comments already removed
- * @param allowedIdentity the email address a `Signed-off-by:` trailer must carry
+ * @param authorIdentity the address the commit is authored by, which is the one
+ *   address a `Signed-off-by:` trailer may carry. It comes from the commit --
+ *   from the object in history, or from `git var GIT_AUTHOR_IDENT` for a commit
+ *   that does not exist yet -- and never from who happens to be running this.
  */
-export function commitMessageViolations(message: string, allowedIdentity: string): Violation[] {
+export function commitMessageViolations(message: string, authorIdentity: string): Violation[] {
   const lines = message.split('\n')
   const violations: Violation[] = []
   const flagged = new Set<number>()
@@ -50,7 +58,7 @@ export function commitMessageViolations(message: string, allowedIdentity: string
   for (const [index, line] of lines.entries()) {
     if (SESSION_TRAILER.test(line)) {
       add(index, 'session trailer')
-    } else if (ATTRIBUTION_TRAILER.test(line) && !isAllowedSignOff(line, allowedIdentity)) {
+    } else if (ATTRIBUTION_TRAILER.test(line) && !isAllowedSignOff(line, authorIdentity)) {
       add(index, 'attribution trailer')
     } else if (AGENT_URL.test(line)) {
       add(index, 'session, trace or conversation URL')
@@ -71,9 +79,19 @@ export function commitMessageViolations(message: string, allowedIdentity: string
   return violations.sort((a, b) => a.line - b.line)
 }
 
-function isAllowedSignOff(line: string, allowedIdentity: string): boolean {
+/**
+ * A sign-off is allowed only when it names the commit's own author. That is the
+ * whole exception: it attributes the work to nobody else, which is why it is the
+ * one trailer permitted, and every other `*-by:` trailer stays rejected however
+ * it is addressed.
+ *
+ * The angle brackets are load-bearing. Without them one address contained in
+ * another -- `a@example.test` inside `ba@example.test` -- would be accepted as a
+ * match.
+ */
+function isAllowedSignOff(line: string, authorIdentity: string): boolean {
   if (!line.startsWith('Signed-off-by: ')) return false
-  return allowedIdentity.length > 0 && line.includes(`<${allowedIdentity}>`)
+  return authorIdentity.length > 0 && line.includes(`<${authorIdentity}>`)
 }
 
 /**

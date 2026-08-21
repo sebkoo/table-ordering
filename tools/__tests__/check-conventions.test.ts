@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import {
+  type Commit,
   type ConventionInput,
   collectInput,
   commitMessagePolicyRule,
@@ -48,7 +49,9 @@ function input(overrides: Partial<ConventionInput> = {}): ConventionInput {
     readme: '# Title\n\n**Status:** 2026-08-19 · bootstrap.\n',
     readmeCommitDates: ['2026-08-19'],
     readmeDirty: false,
-    commitMessages: ['set up toolchain and ci\n\nNo application code yet.'],
+    commits: [
+      { message: 'set up toolchain and ci\n\nNo application code yet.', authorEmail: IDENTITY },
+    ],
     migrations: [
       { path: 'services/api/migrations/0001-create-menu.up.sql', down: 'drop table menu_item;\n' },
     ],
@@ -60,10 +63,14 @@ function input(overrides: Partial<ConventionInput> = {}): ConventionInput {
     ],
     workflowJobs: [{ path: '.github/workflows/ci.yml', job: 'verify', timeoutMinutes: 10 }],
     runStepCommands: [{ line: 12, text: 'psql -U u -d d --single-transaction < 0001.up.sql' }],
-    allowedIdentity: IDENTITY,
     requireHistory: false,
     ...overrides,
   }
+}
+
+/** Messages authored by the same person, which is what history here looks like. */
+function authored(...messages: string[]): Commit[] {
+  return messages.map((message) => ({ message, authorEmail: IDENTITY }))
 }
 
 function verdictOf(rule: Rule): string {
@@ -139,24 +146,27 @@ describe('readme-status-date', () => {
 
 describe('commit-message-policy', () => {
   it('skips on an unborn repository', () => {
-    const rule = commitMessagePolicyRule(input({ commitMessages: null }))
+    const rule = commitMessagePolicyRule(input({ commits: null }))
     expect(verdictOf(rule)).toBe('SKIP')
   })
 
   it('fails on an unborn repository under --require-history', () => {
-    const rule = commitMessagePolicyRule(input({ commitMessages: null, requireHistory: true }))
+    const rule = commitMessagePolicyRule(input({ commits: null, requireHistory: true }))
     expect(verdictOf(rule)).toBe('FAIL')
   })
 
   it('passes over a clean history and counts every message', () => {
-    const messages = ['first subject', 'second subject\n\nwith a body']
-    const outcome = commitMessagePolicyRule(input({ commitMessages: messages })).check()
+    const commits = authored('first subject', 'second subject\n\nwith a body')
+    const outcome = commitMessagePolicyRule(input({ commits })).check()
     expect(outcome).toEqual({ status: 'pass', subjects: 2 })
   })
 
   it('fails when any message in history carries an attribution trailer', () => {
-    const messages = ['clean subject', 'subject\n\nCo-Authored-By: Agent <noreply@example.test>']
-    const outcome = commitMessagePolicyRule(input({ commitMessages: messages })).check()
+    const commits = authored(
+      'clean subject',
+      'subject\n\nCo-Authored-By: Agent <noreply@example.test>',
+    )
+    const outcome = commitMessagePolicyRule(input({ commits })).check()
     expect(outcome.status).toBe('fail')
     if (outcome.status === 'fail') {
       expect(outcome.subjects).toBe(2)
@@ -170,7 +180,7 @@ describe('commit-message-policy', () => {
     // It must not be mistaken for the unborn case: the repository below has
     // done nothing wrong, and reporting FAIL here is the alarm that says the
     // input was built the wrong way.
-    const rule = commitMessagePolicyRule(input({ commitMessages: [] }))
+    const rule = commitMessagePolicyRule(input({ commits: [] }))
     const report = runRules([rule])[0]
     expect(report?.verdict).toBe('FAIL')
     expect(report?.vacuous).toBe(true)
@@ -223,7 +233,7 @@ describe('the report', () => {
   // they evaluate before the first commit.
   it('summarises a repository with no commits as two skips and four passes', () => {
     const reports = runRules(
-      createRules(input({ commitMessages: null, readmeCommitDates: null, readmeDirty: false })),
+      createRules(input({ commits: null, readmeCommitDates: null, readmeDirty: false })),
     )
     const text = formatReports(reports)
     expect(text).toContain('6 checks: 4 PASS, 0 FAIL, 2 SKIP')
@@ -240,7 +250,7 @@ describe('the report', () => {
 
   it('prints a reason beside every skip', () => {
     const reports = runRules(
-      createRules(input({ commitMessages: null, readmeCommitDates: null, readmeDirty: false })),
+      createRules(input({ commits: null, readmeCommitDates: null, readmeDirty: false })),
     )
     for (const line of formatReports(reports).split('\n')) {
       if (!line.includes('SKIP')) continue
@@ -434,7 +444,7 @@ describe('collectInput', () => {
     writeFileSync(join(dir, 'README.md'), '**Status:** 2026-08-19\n', 'utf8')
 
     const collected = collectInput(dir, false)
-    expect(collected.commitMessages).toBeNull()
+    expect(collected.commits).toBeNull()
     expect(collected.readmeCommitDates).toBeNull()
   })
 
@@ -444,7 +454,7 @@ describe('collectInput', () => {
     commitAll(dir, 'add a file that is not the readme')
 
     const collected = collectInput(dir, false)
-    expect(collected.commitMessages).toHaveLength(1)
+    expect(collected.commits).toHaveLength(1)
     expect(collected.readmeCommitDates).toEqual([])
   })
 
@@ -456,9 +466,9 @@ describe('collectInput', () => {
     commitAll(dir, 'second subject\n\nsecond body')
 
     const collected = collectInput(dir, false)
-    expect(collected.commitMessages?.[0]).toContain('second subject')
-    expect(collected.commitMessages?.[0]).toContain('second body')
-    expect(collected.commitMessages?.[1]).toContain('first subject')
+    expect(collected.commits?.[0]?.message).toContain('second subject')
+    expect(collected.commits?.[0]?.message).toContain('second body')
+    expect(collected.commits?.[1]?.message).toContain('first subject')
   })
 
   it('reports the README commit date in UTC, not in the committer timezone', () => {
@@ -500,7 +510,7 @@ describe('collectInput', () => {
     // vacuity contract and blame the selector for a repository that has a
     // commit -- exactly the confusion null is kept distinct from [] to avoid.
     const collected = collectInput(dir, false)
-    expect(collected.commitMessages).toHaveLength(1)
+    expect(collected.commits).toHaveLength(1)
     expect(runRules([commitMessagePolicyRule(collected)])[0]?.verdict).toBe('PASS')
   })
 
@@ -514,11 +524,15 @@ describe('collectInput', () => {
     writeFileSync(join(dir, 'c.txt'), 'c\n', 'utf8')
     commitAll(dir, 'third subject')
 
-    expect(collectInput(dir, false).commitMessages).toHaveLength(3)
+    expect(collectInput(dir, false).commits).toHaveLength(3)
   })
 
-  it('reads the configured identity, which the history rule needs', () => {
-    expect(collectInput(newRepo(), false).allowedIdentity).toBe(IDENTITY)
+  it('reads each commit author from the commit, which the history rule needs', () => {
+    const dir = newRepo()
+    writeFileSync(join(dir, 'a.txt'), 'a\n', 'utf8')
+    commitAll(dir, 'a subject')
+
+    expect(collectInput(dir, false).commits?.[0]?.authorEmail).toBe(IDENTITY)
   })
 
   it('passes --require-history through to the rules', () => {
@@ -607,6 +621,172 @@ describe('an unborn repository whose README.md is untracked', () => {
       'PASS',
       'PASS',
     ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+/**
+ * A check answers about the repository, not about the machine it runs on.
+ *
+ * The condition is deliberately about the whole input rather than about one
+ * rule's verdict: the defect it exists to catch is "an input taken from the
+ * operator", and a field nobody has written yet is covered by comparing the
+ * object. A rule-level assertion would have to be added again for every future
+ * field, which is the same as not having one.
+ *
+ * Both environments are constructed. Taking one of them from whatever this
+ * machine's git answers would leave the condition inert wherever there is no
+ * global user.email: both sides collect the same empty string, the comparison
+ * passes, and the defect is still there. A condition that is red on one laptop
+ * and green on another reports the operator, which is the thing being removed.
+ */
+
+const CONFIGURED_IDENTITY = 'configured@example.test'
+
+/**
+ * A fixed instant inside the window where a UTC date and a Los Angeles date
+ * disagree: the 15th in UTC, the 14th in Los Angeles.
+ *
+ * Pinned rather than left to the clock. Stamped `now`, the two timezones below
+ * agree for seventeen hours of every day, and the timezone half of these
+ * environments would then discriminate only for a suite that happened to run
+ * before 07:00 UTC -- inert the rest of the time, silently.
+ */
+const COMMITTED_AT = '2026-01-15T03:00:00Z'
+
+/** A directory nothing has been put in, so nothing is reachable through HOME. */
+function emptyDirectory(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'table-ordering-home-'))
+  workdirs.push(dir)
+  return dir
+}
+
+/** A global git configuration file carrying exactly one setting. */
+function globalConfigNaming(email: string): string {
+  const path = join(emptyDirectory(), 'gitconfig')
+  writeFileSync(path, `[user]\n\temail = ${email}\n`, 'utf8')
+  return path
+}
+
+/**
+ * The two operator environments a check must not be able to tell apart.
+ *
+ * `GIT_CONFIG_GLOBAL` supplies as well as suppresses, which is what lets both
+ * sides be built rather than only one. Neither variable reaches a repository's
+ * own `.git/config` -- that is why the repositories below never write an
+ * identity into one, and it is why reproducing this defect needed a clone.
+ */
+const IDENTITY_CONFIGURED: Record<string, string> = {
+  GIT_CONFIG_GLOBAL: globalConfigNaming(CONFIGURED_IDENTITY),
+  GIT_CONFIG_SYSTEM: '/dev/null',
+  HOME: emptyDirectory(),
+  TZ: 'UTC',
+}
+
+const IDENTITY_ABSENT: Record<string, string> = {
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_SYSTEM: '/dev/null',
+  HOME: emptyDirectory(),
+  TZ: 'America/Los_Angeles',
+}
+
+/**
+ * Run `body` under one of those environments.
+ *
+ * The environment is set on `process.env` rather than passed to `collectInput`,
+ * so that what runs here is the path `main` takes. A parameter would be a seam
+ * with one caller -- this file -- driving a variation production never takes.
+ * It assumes nothing in this file runs concurrently with the mutation, which
+ * holds while no test in it is marked `.concurrent`.
+ */
+function under<T>(overrides: Record<string, string>, body: () => T): T {
+  const saved = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]))
+
+  Object.assign(process.env, overrides)
+  try {
+    return body()
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+
+type AuthoredCommit = { message: string; author: string }
+
+/**
+ * A repository whose commits carry the authors given, with no identity written
+ * to its configuration at all. The identity goes on the one command that needs
+ * it, so that suppressing the global and system files leaves nothing behind.
+ */
+function repoAuthoredBy(commits: readonly AuthoredCommit[]): string {
+  const dir = mkdtempSync(join(tmpdir(), 'table-ordering-ident-'))
+  workdirs.push(dir)
+  git(dir, ['init', '--quiet', '-b', 'main'])
+  git(dir, ['config', 'commit.gpgsign', 'false'])
+  writeFileSync(join(dir, 'README.md'), BOOTSTRAP_README, 'utf8')
+
+  for (const [index, commit] of commits.entries()) {
+    writeFileSync(join(dir, `file-${index}.txt`), `${index}\n`, 'utf8')
+    git(dir, ['add', '-A'])
+    git(dir, ['commit', '--quiet', '-m', commit.message], {
+      GIT_AUTHOR_NAME: 'An Author',
+      GIT_AUTHOR_EMAIL: commit.author,
+      GIT_AUTHOR_DATE: COMMITTED_AT,
+      GIT_COMMITTER_NAME: 'An Author',
+      GIT_COMMITTER_EMAIL: commit.author,
+      GIT_COMMITTER_DATE: COMMITTED_AT,
+    })
+  }
+
+  return dir
+}
+
+function policyVerdict(dir: string): string {
+  return verdictOf(commitMessagePolicyRule(collectInput(dir, false)))
+}
+
+describe('what a check is allowed to depend on', () => {
+  it('collects the same input with an identity configured and with none anywhere', () => {
+    const dir = repoAuthoredBy([{ message: 'a subject', author: IDENTITY }])
+
+    const configured = under(IDENTITY_CONFIGURED, () => collectInput(dir, false))
+    const absent = under(IDENTITY_ABSENT, () => collectInput(dir, false))
+
+    expect(absent).toEqual(configured)
+  })
+
+  /**
+   * The two halves pin the rule from both sides. Without the first, forbidding
+   * the trailer outright would satisfy the second; without the second, accepting
+   * every trailer would satisfy the first.
+   */
+  it('accepts a sign-off naming the commit author, whatever the machine says', () => {
+    const dir = repoAuthoredBy([
+      { message: `subject\n\nSigned-off-by: An Author <${IDENTITY}>`, author: IDENTITY },
+    ])
+
+    expect(under(IDENTITY_CONFIGURED, () => policyVerdict(dir))).toBe('PASS')
+    expect(under(IDENTITY_ABSENT, () => policyVerdict(dir))).toBe('PASS')
+  })
+
+  /**
+   * The difference is placed where a weaker comparison would not look. The
+   * allowed value is a proper suffix of the one present, so a containment test
+   * that dropped the angle brackets would call the two equal -- `a@example.test`
+   * does occur inside `ba@example.test`, while `<a@example.test>` does not occur
+   * inside `<ba@example.test>`. A pair differing at the first character would be
+   * told apart by every weakening, and so would establish nothing.
+   */
+  it('rejects a sign-off naming somebody who is not the author, whatever the machine says', () => {
+    const dir = repoAuthoredBy([
+      { message: 'subject\n\nSigned-off-by: B <ba@example.test>', author: 'a@example.test' },
+    ])
+
+    expect(under(IDENTITY_CONFIGURED, () => policyVerdict(dir))).toBe('FAIL')
+    expect(under(IDENTITY_ABSENT, () => policyVerdict(dir))).toBe('FAIL')
   })
 })
 

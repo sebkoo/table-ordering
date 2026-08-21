@@ -7,6 +7,11 @@
  * what lets the tests drive every state of every rule from a fixture instead
  * of from whatever the repository happens to look like when they run.
  *
+ * What `collectInput` may read is the tree and the history, and nothing else.
+ * A value only the machine can answer for -- the operator's git configuration,
+ * their environment -- would make a verdict a fact about whoever ran the check,
+ * which is a different question from the one every rule here is asking.
+ *
  * A rule reports three outcomes, not two. A rule that could not evaluate --
  * because the commit it would have to inspect does not exist yet -- is not a
  * passing rule and is not a failing one, and collapsing that into a boolean
@@ -38,6 +43,13 @@ export type Rule = {
   /** true: an outcome reporting zero subjects is a FAILURE, not a pass */
   expectsSubjects: boolean
   check(): Outcome
+}
+
+export type Commit = {
+  /** The commit message, comments already absent because git stored it. */
+  message: string
+  /** The address the commit is authored by, from the object rather than the machine. */
+  authorEmail: string
 }
 
 export type Migration = {
@@ -81,7 +93,11 @@ export type ConventionInput = {
   /** README.md has staged or unstaged modifications. */
   readmeDirty: boolean
   /**
-   * Every commit message in history, or null when the repository is unborn.
+   * Every commit in history, newest first, or null when the repository is
+   * unborn. Each carries its author's address as well as its message, because
+   * the message policy asks whether a sign-off names the commit's own author,
+   * and the answer has to come from the commit rather than from whoever is
+   * running the check.
    *
    * null and [] mean different things and must not be conflated. null is
    * "there is no history to check". [] is "history exists and contains no
@@ -89,7 +105,7 @@ export type ConventionInput = {
    * this rule for a repository that has done nothing wrong. Derive null from
    * git's unborn state, never from an empty log.
    */
-  commitMessages: string[] | null
+  commits: Commit[] | null
   /**
    * Every `*.up.sql` under `services/<service>/migrations`, in path order,
    * each carrying the text of its `*.down.sql` sibling or null when it has
@@ -121,8 +137,6 @@ export type ConventionInput = {
    * would both invent violations and miss them.
    */
   runStepCommands: RunStepCommand[]
-  /** The email address a Signed-off-by trailer must carry. */
-  allowedIdentity: string
   /** Treat "no history to evaluate" as a failure rather than a skip. */
   requireHistory: boolean
 }
@@ -200,14 +214,19 @@ export function readmeStatusDateRule(input: ConventionInput): Rule {
  * commits made before it, and cannot without rewriting history, so this rule
  * ships with the first commit rather than with the first commit that would
  * have violated it.
+ *
+ * Each commit is judged against its own author. An identity read from the
+ * machine would make the verdict a fact about whoever ran the check -- the same
+ * commit passing here and failing in CI -- and it could never catch the thing
+ * the trailer is for: signing off in somebody else's name.
  */
 export function commitMessagePolicyRule(input: ConventionInput): Rule {
   return {
     name: 'commit-message-policy',
     expectsSubjects: true,
     check(): Outcome {
-      const messages = input.commitMessages
-      if (messages === null) {
+      const commits = input.commits
+      if (commits === null) {
         const reason = 'the repository has no commits yet'
         if (input.requireHistory) {
           return { status: 'fail', subjects: 0, violations: [{ where: 'history', detail: reason }] }
@@ -216,9 +235,9 @@ export function commitMessagePolicyRule(input: ConventionInput): Rule {
       }
 
       const violations: Violation[] = []
-      for (const [index, message] of messages.entries()) {
-        const subject = (message.split('\n')[0] ?? '').trim()
-        for (const violation of commitMessageViolations(message, input.allowedIdentity)) {
+      for (const [index, commit] of commits.entries()) {
+        const subject = (commit.message.split('\n')[0] ?? '').trim()
+        for (const violation of commitMessageViolations(commit.message, commit.authorEmail)) {
           violations.push({
             where: `commit ${index + 1} (${subject})`,
             detail: `line ${violation.line}: ${violation.reason}: ${violation.text}`,
@@ -226,8 +245,8 @@ export function commitMessagePolicyRule(input: ConventionInput): Rule {
         }
       }
 
-      if (violations.length > 0) return { status: 'fail', subjects: messages.length, violations }
-      return { status: 'pass', subjects: messages.length }
+      if (violations.length > 0) return { status: 'fail', subjects: commits.length, violations }
+      return { status: 'pass', subjects: commits.length }
     },
   }
 }
@@ -458,6 +477,13 @@ export function hasFailure(reports: readonly RuleReport[]): boolean {
  */
 const RECORD = String.fromCharCode(30)
 
+/**
+ * ASCII unit separator, between a record's two fields. An email address cannot
+ * contain one, and neither can the first line of a message, so the split is
+ * exact rather than a guess at where the address ends.
+ */
+const FIELD = String.fromCharCode(31)
+
 function gitOrNull(root: string, args: readonly string[]): string | null {
   try {
     return execFileSync('git', ['-C', root, ...args], {
@@ -472,7 +498,7 @@ function gitOrNull(root: string, args: readonly string[]): string | null {
 }
 
 /**
- * Every commit message in history, newest first.
+ * Every commit in history, newest first, with the address it is authored by.
  *
  * The format terminates each record, so the split always leaves one trailing
  * empty segment. Exactly that one is removed. Every other segment is a commit,
@@ -481,11 +507,23 @@ function gitOrNull(root: string, args: readonly string[]): string | null {
  * message would arrive at the history rule as [], which reports a vacuous
  * selector for a repository that plainly has history. An empty message is a
  * matter for the policy to judge, not a reason to pretend the commit is absent.
+ *
+ * `%ae` is the address in the object, not `%aE`, which a `.mailmap` can rewrite.
+ * The rule asks what the commit says about itself.
  */
-function readCommitMessages(root: string): string[] {
-  const records = (gitOrNull(root, ['log', `--format=%B${RECORD}`]) ?? '').split(RECORD)
+function readCommits(root: string): Commit[] {
+  const format = `--format=%ae${FIELD}%B${RECORD}`
+  const records = (gitOrNull(root, ['log', format]) ?? '').split(RECORD)
   if (records.length > 1 && (records[records.length - 1] ?? '').trim() === '') records.pop()
-  return records.map((message) => message.trim())
+
+  return records.map((record) => {
+    const end = record.indexOf(FIELD)
+    // A record with no separator cannot happen while git honours the format,
+    // and mapping it to an empty address is what makes that visible: every
+    // sign-off in the commit is then rejected, rather than every one allowed.
+    if (end === -1) return { message: record.trim(), authorEmail: '' }
+    return { message: record.slice(end + 1).trim(), authorEmail: record.slice(0, end).trim() }
+  })
 }
 
 /**
@@ -710,7 +748,7 @@ export function collectInput(root: string, requireHistory: boolean): ConventionI
   // history rule as zero subjects and fail a repository that is merely new.
   const unborn = gitOrNull(root, ['rev-parse', '--verify', '--quiet', 'HEAD']) === null
 
-  const commitMessages = unborn ? null : readCommitMessages(root)
+  const commits = unborn ? null : readCommits(root)
 
   const readmeCommitDates = unborn
     ? null
@@ -740,12 +778,11 @@ export function collectInput(root: string, requireHistory: boolean): ConventionI
     readme,
     readmeCommitDates,
     readmeDirty,
-    commitMessages,
+    commits,
     migrations: readMigrations(root),
     features: readFeatures(root),
     workflowJobs: readWorkflowJobs(root),
     runStepCommands: readRunStepCommands(readme),
-    allowedIdentity: (gitOrNull(root, ['config', '--get', 'user.email']) ?? '').trim(),
     requireHistory,
   }
 }

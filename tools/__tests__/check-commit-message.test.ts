@@ -29,13 +29,13 @@ afterAll(() => {
 })
 
 /** Run the CLI against a message file, from inside the temporary repository. */
-function check(message: string): { status: number; stderr: string } {
+function check(message: string, env: NodeJS.ProcessEnv = {}): { status: number; stderr: string } {
   const messagePath = join(workdir, 'COMMIT_EDITMSG')
   writeFileSync(messagePath, message, 'utf8')
   const result = spawnSync(
     process.execPath,
     ['--disable-warning=ExperimentalWarning', CLI, messagePath],
-    { cwd: workdir, encoding: 'utf8' },
+    { cwd: workdir, encoding: 'utf8', env: { ...process.env, ...env } },
   )
   return { status: result.status ?? -1, stderr: result.stderr }
 }
@@ -48,6 +48,31 @@ describe('check-commit-message CLI', () => {
   it('exits 0 for a Signed-off-by trailer carrying the configured identity', () => {
     const message = `subject line\n\nbody\n\nSigned-off-by: A Committer <${IDENTITY}>\n`
     expect(check(message).status).toBe(0)
+  })
+
+  /**
+   * The identity comes from the commit about to be made, not from the
+   * configuration of whoever is making it. Those are the same value until
+   * GIT_AUTHOR_EMAIL or --author separates them, and this is where the
+   * difference shows: the configured address is `IDENTITY`, the commit will be
+   * authored by somebody else, and a sign-off naming the configured address
+   * would be a sign-off in a name that is not the author's.
+   *
+   * A hook reading `git config --get user.email` accepts the first of these and
+   * rejects the second, which is exactly backwards.
+   */
+  describe('when the commit will be authored by somebody other than the configured user', () => {
+    const AUTHOR = { GIT_AUTHOR_EMAIL: 'author@example.test', GIT_AUTHOR_NAME: 'An Author' }
+
+    it('exits 1 for a sign-off naming the configured identity', () => {
+      const message = `subject line\n\nSigned-off-by: A Committer <${IDENTITY}>\n`
+      expect(check(message, AUTHOR).status).toBe(1)
+    })
+
+    it('exits 0 for a sign-off naming the author', () => {
+      const message = 'subject line\n\nSigned-off-by: An Author <author@example.test>\n'
+      expect(check(message, AUTHOR).status).toBe(0)
+    })
   })
 
   it.each([

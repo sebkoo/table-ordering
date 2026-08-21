@@ -70,13 +70,34 @@ Write it before touching anything, and treat approving it as the lock.
    mismatch is fixed in the working tree — never by amending afterwards, because
    an amend rewrites a commit the hook has already accepted.
 6. Commit. The hook runs; a rejection stops the run and the message is fixed.
-7. A fresh sibling clone of the commit just made installs, checks, and runs the
-   differential commit-message hook probe: a message the policy rejects is
-   rejected there, and a clean one is accepted. `git rev-parse HEAD` in the
-   clone is printed beside the revision under test, and the two are equal. A
-   clone taken before the commit holds the parent, and nothing in its output
-   says which it holds: a clone is clean whatever tree it came from, and the
-   rule count is the same either way.
+7. A fresh sibling clone of the commit just made installs, then checks and runs
+   the differential commit-message hook probe, **in that order**. `git rev-parse
+   HEAD` in the clone is printed beside the revision under test, and the two are
+   equal. A clone taken before the commit holds the parent, and nothing in its
+   output says which it holds: a clone is clean whatever tree it came from, and
+   the rule count is the same either way.
+
+   A clone replaces the tree and not the environment. It drops the repository's
+   own configuration and inherits the machine's, and CI has neither, so the
+   checks run with the operator's git configuration suppressed:
+
+   ```sh
+   GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+     pnpm verify --require-history --require-environment
+   ```
+
+   `git config --get user.email` is printed first and answers with nothing: the
+   suppression is read, not assumed, and neither variable reaches a `.git/config`.
+
+   Then the hook half: a message the policy rejects is rejected there, and a
+   clean one is accepted. It commits under `GIT_AUTHOR_*` and `GIT_COMMITTER_*`
+   on the `git commit` itself, so the identity is named by the probe rather than
+   inherited and nothing is written to the clone's configuration.
+
+   The order is load-bearing. The hook half writes to the clone — a commit into
+   its history, and anything it puts in its configuration — and the history and
+   the configuration are the subjects the other half reads. Run it first and the
+   checks are no longer reading the revision under test.
 
 ## Pushing
 

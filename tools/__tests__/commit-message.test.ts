@@ -39,17 +39,25 @@ describe('commitMessageViolations', () => {
       expect(reasons(message)).toContain('attribution trailer')
     })
 
-    it('allows Signed-off-by carrying the configured identity', () => {
+    it('allows Signed-off-by carrying the commit author', () => {
       const message = `subject line\n\nSigned-off-by: A Human <${IDENTITY}>`
       expect(commitMessageViolations(message, IDENTITY)).toEqual([])
     })
 
-    it('rejects Signed-off-by carrying any other identity', () => {
+    it('rejects Signed-off-by carrying anybody who is not the author', () => {
       const message = 'subject line\n\nSigned-off-by: Someone Else <other@example.com>'
       expect(reasons(message)).toContain('attribution trailer')
     })
 
-    it('rejects Signed-off-by when no identity is configured', () => {
+    // The addresses differ only in that one contains the other, so a
+    // containment test written without the angle brackets would call them
+    // equal. A pair differing at the first character establishes nothing here.
+    it('rejects a sign-off whose address merely contains the author address', () => {
+      const message = 'subject line\n\nSigned-off-by: B <ba@example.test>'
+      expect(reasons(message, 'a@example.test')).toContain('attribution trailer')
+    })
+
+    it('rejects Signed-off-by when the author address is unknown', () => {
       const message = `subject line\n\nSigned-off-by: A Human <${IDENTITY}>`
       expect(reasons(message, '')).toContain('attribution trailer')
     })

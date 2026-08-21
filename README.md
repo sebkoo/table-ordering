@@ -449,6 +449,7 @@ each with the alternatives that were rejected and why.
 - [0019 Take the action release that ends the Node 20 notice, and report a run's warnings without asserting them](docs/adr/0019-report-a-runs-warnings-without-asserting-them.md)
 - [0020 Scope a write with row-level security, carried on the transaction](docs/adr/0020-scope-a-write-with-row-level-security.md)
 - [0021 Record an order as a submission with lines, and nothing else](docs/adr/0021-record-an-order-as-a-submission-with-lines.md)
+- [0022 Take a check's inputs from the repository, not from the machine](docs/adr/0022-take-a-checks-inputs-from-the-repository.md)
 
 ## Known limitations
 
@@ -531,6 +532,21 @@ each with the alternatives that were rejected and why.
 - `readme-status-date`'s subject count has never been observed independently of
   `commit-message-policy`'s: every commit so far has touched README. The first
   commit that leaves README alone is the first run that can tell them apart.
+- One commit of fifteen carries a `Signed-off-by:`, and that is the whole real
+  subject of the sign-off rule. Its allowed branch — a sign-off naming the
+  commit's own author — is exercised by that one commit; its rejected branch —
+  a sign-off naming somebody else — by no commit at all, only by fixtures.
+  Nothing is grandfathered, and that is why: the one trailer names its author
+  and complies. This is the same shape as the bullet above, and there are now
+  two rules whose branches real subjects have never told apart.
+- The invariant is wider than the check that guards it. `collectInput` is
+  checked by collecting twice under two constructed environments that differ in
+  the operator's git configuration, in `HOME` and in `TZ`. An input read from
+  somewhere else on the machine — a hostname, a path outside the repository, a
+  variable nobody thought to vary — passes that check. It catches the class of
+  input that produced the divergence in
+  [ADR 0022](docs/adr/0022-take-a-checks-inputs-from-the-repository.md), not
+  every way a check could learn something about its operator.
 - The convention checker carries six rules. The rest arrive with the code they
   govern, so that each rule shows up to a set of subjects that already comply.
 - `compose.yaml` carries development credentials inline, and starts a Redis
