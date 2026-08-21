@@ -294,19 +294,39 @@ export function jobSpanSeconds(jobs: readonly JobTimes[]): Span {
 }
 
 /**
+ * How many warning annotations a run carries, or why that could not be read.
+ *
+ * Reported, and never asserted against zero. `run-verified` answers one
+ * question -- did CI verify this revision -- and how many deprecation notices
+ * GitHub attached to the run is not that question. A check that answered both
+ * would go red without saying which of them had gone wrong, and these lines are
+ * worth reading only while each of them means one thing. A count that cannot be
+ * read is a different matter and is a violation: a check that inspected nothing
+ * has established nothing. ADR 0019.
+ */
+export type RunWarnings = { read: true; count: number } | { read: false; reason: string }
+
+/**
  * The whole `run-verified` line: the differences from the declaration, and --
  * when there are none -- the two timings the log and the job list already
- * carried.
+ * carried, and the count of the run's warning annotations.
  *
- * Both figures were being fetched by hand after every commit, from sources this
- * check had already read. Neither is optional on a PASS: a line that quietly
- * left one out would send a reader back to the log without telling them to, so
- * a figure that cannot be had is a violation and the line is a FAIL naming why.
+ * The timings were being fetched by hand after every commit, from sources this
+ * check had already read. The count was not being fetched at all, which is how
+ * one deprecation notice rode every run this repository ever produced without
+ * anybody having to see it.
+ *
+ * None of the three is optional on a PASS, and the count prints even when it is
+ * zero. A line that quietly left one out would send a reader back to the log
+ * without telling them to; a clause omitted at zero would put a count that never
+ * arrived on the same branch as a run that really carried none. So a figure that
+ * cannot be had is a violation and the line is a FAIL naming why.
  */
 export function runVerifiedReport(
   databaseId: number,
   log: RunLog,
   jobs: readonly JobTimes[],
+  warnings: RunWarnings,
   expected: readonly string[],
 ): CheckReport {
   // First, so that everything below can read the text. A log that could not be
@@ -316,12 +336,18 @@ export function runVerifiedReport(
   const violations = runVerifiedViolations(log, expected)
   const span = jobSpanSeconds(jobs)
   if (!span.ok) violations.push({ where: `run ${databaseId}`, detail: span.reason })
+  if (!warnings.read) {
+    violations.push({
+      where: `run ${databaseId}`,
+      detail: `its warning annotations could not be read: ${warnings.reason}`,
+    })
+  }
 
   // A log with no summary line has already produced its own violation above, so
   // the middle disjunct never decides this on its own. It is written out because
   // the alternative is a fallback that prints a figure nothing read.
   const summary = parseSummary(log.text)
-  if (violations.length > 0 || summary === null || !span.ok) {
+  if (violations.length > 0 || summary === null || !span.ok || !warnings.read) {
     return fail('run-verified', violations)
   }
 
@@ -331,7 +357,8 @@ export function runVerifiedReport(
     verdict: 'PASS',
     detail:
       `run ${databaseId}, ${lines} verdict lines, all PASS, ` +
-      `verify: ${summary.elapsed} in ${span.seconds}s of jobs`,
+      `verify: ${summary.elapsed} in ${span.seconds}s of jobs, ` +
+      `${warnings.count} warning${warnings.count === 1 ? '' : 's'}`,
     violations: [],
   }
 }
@@ -652,15 +679,20 @@ function checkRun(revision: string): CheckReport {
       ? { read: true, text: viewed.stdout }
       : { read: false, reason: viewed.stderr.trim() || `gh run view exited ${viewed.status}` }
 
-  // The fourth `gh` call, and the reason it is not three. The job's duration is
-  // reported so that nobody fetches it by hand, and the two sources already in
-  // hand both give the wrong number. On run 32416115120, whose job GitHub
-  // reports as 52s: the run's own startedAt-to-updatedAt, in the JSON `gh run
-  // list` already returned, is 57s, because it counts the queueing before the
-  // job and the bookkeeping after it; the log's first-to-last timestamp is
-  // 48.5s, because the log begins once the runner is already up. Only the job's
-  // own pair reproduces what GitHub prints, and a figure close to the published
-  // one but not equal to it is worse than no figure.
+  // The job list, asked for because two things this line reports are in it and
+  // nowhere else.
+  //
+  // The first is the job's duration, reported so that nobody fetches it by
+  // hand. The two sources already in hand both give the wrong number. On run
+  // 32416115120, whose job GitHub reports as 52s: the run's own
+  // startedAt-to-updatedAt, in the JSON `gh run list` already returned, is 57s,
+  // because it counts the queueing before the job and the bookkeeping after it;
+  // the log's first-to-last timestamp is 48.5s, because the log begins once the
+  // runner is already up. Only the job's own pair reproduces what GitHub
+  // prints, and a figure close to the published one but not equal to it is
+  // worse than no figure.
+  //
+  // The second is each job's id, which is what `readWarnings` asks by.
   const listedJobs = gh(['run', 'view', String(run.databaseId), '--json', 'jobs'])
   if (listedJobs.status !== 0) {
     return fail('run-verified', [
@@ -668,16 +700,71 @@ function checkRun(revision: string): CheckReport {
     ])
   }
 
-  let jobs: JobTimes[]
+  let jobs: ListedJob[]
   try {
-    jobs = (JSON.parse(listedJobs.stdout) as { jobs: JobTimes[] | null }).jobs ?? []
+    jobs = (JSON.parse(listedJobs.stdout) as { jobs: ListedJob[] | null }).jobs ?? []
   } catch (error) {
     return fail('run-verified', [
       { where: 'gh run view --json jobs', detail: `unreadable: ${String(error)}` },
     ])
   }
 
-  return runVerifiedReport(run.databaseId, log, jobs, expectedStepNames())
+  return runVerifiedReport(run.databaseId, log, jobs, readWarnings(jobs), expectedStepNames())
+}
+
+/** A job as `gh run view --json jobs` returns it, for the two fields read here. */
+type ListedJob = JobTimes & { databaseId: number }
+
+/**
+ * How many warning annotations the run's jobs carry between them.
+ *
+ * One request per job, and no number of requests is a property of this file:
+ * `ci.yml` declares one job today and this follows whatever it declares.
+ *
+ * The count belongs to a check run rather than to a workflow run, and nothing
+ * `gh run view --json jobs` returns carries it -- the fields are completedAt,
+ * conclusion, databaseId, name, startedAt, status and url. What closes the gap
+ * is that a job's `databaseId` is also its check run's id, which GitHub does not
+ * document.
+ *
+ * That is an undocumented property of somebody else's system, which is the kind
+ * of dependency ADR 0018 exists to keep out of this tool's lookups. It is
+ * admitted here by that record's own test: a wrong id answers 404, and the 404
+ * becomes a violation naming it. The failure is loud, not a plausible count
+ * nothing produced.
+ */
+function readWarnings(jobs: readonly ListedJob[]): RunWarnings {
+  let count = 0
+
+  for (const job of jobs) {
+    const viewed = gh(['api', `repos/{owner}/{repo}/check-runs/${job.databaseId}`])
+    if (viewed.status !== 0) {
+      return {
+        read: false,
+        reason: viewed.stderr.trim() || `gh api exited ${viewed.status}`,
+      }
+    }
+
+    let found: unknown
+    try {
+      found = (JSON.parse(viewed.stdout) as { output?: { annotations_count?: unknown } }).output
+        ?.annotations_count
+    } catch (error) {
+      return { read: false, reason: `check run ${job.databaseId}: unreadable: ${String(error)}` }
+    }
+
+    // A field the endpoint stopped returning arrives as `undefined`, which
+    // would add to nothing and leave a zero looking like an answer.
+    if (typeof found !== 'number') {
+      return {
+        read: false,
+        reason: `check run ${job.databaseId} returned no output.annotations_count`,
+      }
+    }
+    count += found
+  }
+
+  return { read: true, count }
 }
 
 function checkMetadata(expected: Metadata): CheckReport {

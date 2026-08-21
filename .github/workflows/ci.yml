@@ -50,7 +50,18 @@ jobs:
           # would change what they are able to evaluate.
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
+      # v5 rather than v4, because the v4 tag stopped moving. Every run this
+      # repository produced carried one warning annotation naming
+      # `pnpm/action-setup@v4` as targeting Node.js 20; the runner was already
+      # forcing it onto Node.js 24, so only the declared `runs.using` was stale.
+      # The fix shipped as v4.4.0 and again as v5.0.0 -- the same commit,
+      # fc06bc1257f339d1d5d8b3a19a8cae5388b55320 -- and the floating v4 tag was
+      # never advanced to it. A floating major is what the two steps around this
+      # one use, so the number moves and the form does not; this does not stop
+      # the next tag going stale, it puts the notice where `check-push` prints
+      # it. Not v6: that rewrites how pnpm is installed, which ending a
+      # deprecation does not require. ADR 0019.
+      - uses: pnpm/action-setup@v5
 
       - uses: actions/setup-node@v5
         with:

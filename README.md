@@ -282,12 +282,13 @@ pnpm check-push --revision "$(git rev-parse HEAD)" \
   --require-environment
 ```
 
-Run against the push of `094baff`, it printed:
+Run against the push of `6064402`, it printed:
 
 ```
-push-arrived ....... PASS  origin holds 094baff17ac659eb784cff872a24f1936afbf582
-run-verified ....... PASS  run 32416115120, 12 verdict lines, all PASS, verify: 10.7s in 52s of jobs
+push-arrived ....... PASS  origin holds 60644025ad99c59c5d90bd8bc8309216f0b148c0
+run-verified ....... PASS  run 32432461939, 12 verdict lines, all PASS, verify: 10.1s in 47s of jobs, 1 warning
 metadata-declared .. PASS  the description and 11 topics are as declared
+check-push: PASS
 ```
 
 Each line answers a question the obvious source answers wrongly. The revision
@@ -303,6 +304,14 @@ The two timings come out of what the check had already fetched. `verify`'s own
 elapsed figure is in the log that is read to count those verdict lines, and the
 job's duration is one call from the run that was already found. Both were being
 looked up by hand after every push.
+
+The warning count is not free in that way. It belongs to a check run rather than
+to a workflow run, so it costs a request per job, asked by an id the job list
+already carried. It is reported and never asserted against zero: the line
+answers whether CI verified the revision, and a deprecation somebody else
+scheduled is a different question
+([ADR 0019](docs/adr/0019-report-a-runs-warnings-without-asserting-them.md)). It
+reads `1 warning` above because that run predates the action bump that ended it.
 
 It needs `gh`. Without it the last two lines skip and name what is missing, and
 `--require-environment` turns those skips into failures, which is what the
@@ -334,6 +343,7 @@ each with the alternatives that were rejected and why.
 - [0016 Make every run step atomic, and check the flag rather than restate it](docs/adr/0016-make-every-run-step-atomic.md)
 - [0017 Check the procedure by running it, not by matching its text](docs/adr/0017-check-the-procedure-by-running-it.md)
 - [0018 Pick a revision's newest run, and extract only a picking that fails silently](docs/adr/0018-pick-a-revisions-newest-run.md)
+- [0019 Take the action release that ends the Node 20 notice, and report a run's warnings without asserting them](docs/adr/0019-report-a-runs-warnings-without-asserting-them.md)
 
 ## Known limitations
 
@@ -369,15 +379,19 @@ each with the alternatives that were rejected and why.
 - Nothing forces `pnpm check-push` to be run. It is a step in the commit
   procedure, not a gate, so a push nobody checked is indistinguishable from one
   that passed.
+- `pnpm check-push` reports a run's warning annotations without asserting that
+  there are none, so a run that started carrying one is a number on a line
+  somebody has to read rather than a check that fails. That is deliberate, and
+  the reasoning is in ADR 0019.
 - `pnpm check-push` needs GitHub to still hold the run's log. Logs are retained
   for a limited period, and after that the run cannot be verified this way. The
   check reports that the log could not be read, rather than reporting a run that
   printed nothing it recognised.
 - `pnpm check-push`'s CLI half is reached by no test. It fetches the run list,
-  the log and the job times and parses each, and no fixture can see which
-  arguments those calls carry. The boundary between that half and the tested one
-  is drawn by a header comment and nothing else, so code can cross it without
-  anything noticing.
+  the log, the job times and each job's annotation count, and parses each, and
+  no fixture can see which arguments those calls carry. The boundary between
+  that half and the tested one is drawn by a header comment and nothing else, so
+  code can cross it without anything noticing.
 - `readme-status-date`'s subject count has never been observed independently of
   `commit-message-policy`'s: every commit so far has touched README. The first
   commit that leaves README alone is the first run that can tell them apart.

@@ -34,6 +34,7 @@ import {
   pushArrivedViolations,
   type Run,
   type RunLog,
+  type RunWarnings,
   runForRevision,
   runVerifiedReport,
   runVerifiedViolations,
@@ -74,6 +75,14 @@ const GREEN_RUN = 32298949382
 const GREEN_JOBS: JobTimes[] = [
   { startedAt: '2026-08-19T20:31:06Z', completedAt: '2026-08-19T20:33:33Z' },
 ]
+
+/**
+ * A run's warning-annotation count, as `gh api .../check-runs/<job>` reports it.
+ * Run 32432461939 carried one -- the Node.js 20 deprecation notice this
+ * repository's runs all carried -- so a non-zero count is a value the collector
+ * really emits rather than one invented to make a point.
+ */
+const counted = (count: number): RunWarnings => ({ read: true, count })
 
 const EXPECTED = expectedStepNames()
 
@@ -228,11 +237,11 @@ describe('the log of the run for a revision', () => {
  */
 describe('the timings a passing run reports', () => {
   it('carries the run, the line count, the elapsed and the job span', () => {
-    const report = runVerifiedReport(GREEN_RUN, read(GREEN), GREEN_JOBS, EXPECTED)
+    const report = runVerifiedReport(GREEN_RUN, read(GREEN), GREEN_JOBS, counted(0), EXPECTED)
 
     expect(report.verdict).toBe('PASS')
     expect(report.detail).toBe(
-      'run 32298949382, 10 verdict lines, all PASS, verify: 8.4s in 147s of jobs',
+      'run 32298949382, 10 verdict lines, all PASS, verify: 8.4s in 147s of jobs, 0 warnings',
     )
   })
 
@@ -242,9 +251,9 @@ describe('the timings a passing run reports', () => {
   it('takes the elapsed from the log it was given', () => {
     const slower = withLine(GREEN, 'verify: PASS  8.4s', 'verify: PASS  8.5s')
 
-    expect(runVerifiedReport(GREEN_RUN, read(slower), GREEN_JOBS, EXPECTED).detail).toBe(
-      'run 32298949382, 10 verdict lines, all PASS, verify: 8.5s in 147s of jobs',
-    )
+    expect(
+      runVerifiedReport(GREEN_RUN, read(slower), GREEN_JOBS, counted(0), EXPECTED).detail,
+    ).toBe('run 32298949382, 10 verdict lines, all PASS, verify: 8.5s in 147s of jobs, 0 warnings')
   })
 
   // Two integer digits, which is what a real run prints today. A pattern
@@ -252,15 +261,15 @@ describe('the timings a passing run reports', () => {
   it('reads an elapsed figure wider than the one in the fixture', () => {
     const wider = withLine(GREEN, 'verify: PASS  8.4s', 'verify: PASS  10.7s')
 
-    expect(runVerifiedReport(GREEN_RUN, read(wider), GREEN_JOBS, EXPECTED).detail).toBe(
-      'run 32298949382, 10 verdict lines, all PASS, verify: 10.7s in 147s of jobs',
+    expect(runVerifiedReport(GREEN_RUN, read(wider), GREEN_JOBS, counted(0), EXPECTED).detail).toBe(
+      'run 32298949382, 10 verdict lines, all PASS, verify: 10.7s in 147s of jobs, 0 warnings',
     )
   })
 
   // A figure that cannot be had is a violation, never a clause left off a PASS
   // line. The line would otherwise read as a complete report of a green run.
   it('fails when gh reported no jobs, rather than dropping the span', () => {
-    const report = runVerifiedReport(GREEN_RUN, read(GREEN), [], EXPECTED)
+    const report = runVerifiedReport(GREEN_RUN, read(GREEN), [], counted(0), EXPECTED)
 
     expect(report.verdict).toBe('FAIL')
     expect(details([...report.violations])).toEqual([
@@ -273,6 +282,7 @@ describe('the timings a passing run reports', () => {
       GREEN_RUN,
       read(GREEN),
       [{ startedAt: '2026-08-19T20:31:06Z', completedAt: '' }],
+      counted(0),
       EXPECTED,
     )
 
@@ -287,10 +297,99 @@ describe('the timings a passing run reports', () => {
     const missing = withLine(GREEN, 'lint ............. PASS  0.1s', 'lint built nothing')
 
     expect(
-      details([...runVerifiedReport(GREEN_RUN, read(missing), [], EXPECTED).violations]),
+      details([
+        ...runVerifiedReport(GREEN_RUN, read(missing), [], counted(0), EXPECTED).violations,
+      ]),
     ).toEqual([
       'lint: no verdict line in the log',
       'run 32298949382: gh reported no jobs for this run',
+    ])
+  })
+})
+
+/**
+ * The count is why this commit exists, and it is reported rather than asserted.
+ * `run-verified` answers one question -- did CI verify this revision -- and how
+ * many deprecation notices GitHub attached to the run is not that question. A
+ * check that answered both would go red without saying which of them had gone
+ * wrong. ADR 0019.
+ *
+ * The clause sits at the end of the line, so the string without it is a proper
+ * prefix of the string with it: a `startsWith` or an `includes` calls the two
+ * equal where full equality does not. That is what makes the conditions below
+ * able to fail, and it is why each asserts the whole detail rather than a part.
+ */
+describe('the warning annotations the run carried', () => {
+  // One, which is what every run this repository has produced carried until the
+  // action pinned in `ci.yml` moved. Singular, and the fixture that would catch
+  // a missing plural rule differs from it at its final character alone.
+  it('carries the count it was given, singular at one', () => {
+    expect(runVerifiedReport(GREEN_RUN, read(GREEN), GREEN_JOBS, counted(1), EXPECTED).detail).toBe(
+      'run 32298949382, 10 verdict lines, all PASS, verify: 8.4s in 147s of jobs, 1 warning',
+    )
+  })
+
+  it('is plural above one', () => {
+    expect(runVerifiedReport(GREEN_RUN, read(GREEN), GREEN_JOBS, counted(2), EXPECTED).detail).toBe(
+      'run 32298949382, 10 verdict lines, all PASS, verify: 8.4s in 147s of jobs, 2 warnings',
+    )
+  })
+
+  // The clause prints at zero rather than being left off. Omitted there, a count
+  // that never arrived would take the same branch as a run that really carried
+  // none, and the two states would print the same line.
+  it('prints the clause at zero, plural, rather than omitting it', () => {
+    const detail = runVerifiedReport(
+      GREEN_RUN,
+      read(GREEN),
+      GREEN_JOBS,
+      counted(0),
+      EXPECTED,
+    ).detail
+
+    expect(detail).toBe(
+      'run 32298949382, 10 verdict lines, all PASS, verify: 8.4s in 147s of jobs, 0 warnings',
+    )
+    expect(detail.endsWith('of jobs')).toBe(false)
+  })
+
+  // A count that cannot be had is a violation naming why, never a clause left
+  // off a PASS line -- the same answer the job span gives, for the same reason:
+  // the line would otherwise read as a complete report of a green run.
+  it('fails when the count could not be read, naming why', () => {
+    const report = runVerifiedReport(
+      GREEN_RUN,
+      read(GREEN),
+      GREEN_JOBS,
+      { read: false, reason: 'HTTP 404: Not Found' },
+      EXPECTED,
+    )
+
+    expect(report.verdict).toBe('FAIL')
+    expect(details([...report.violations])).toEqual([
+      'run 32298949382: its warning annotations could not be read: HTTP 404: Not Found',
+    ])
+  })
+
+  // Every difference at once. Reporting them one at a time would send a reader
+  // round the loop three times for one broken run.
+  it('reports a log difference, a span difference and an unreadable count together', () => {
+    const missing = withLine(GREEN, 'lint ............. PASS  0.1s', 'lint built nothing')
+
+    expect(
+      details([
+        ...runVerifiedReport(
+          GREEN_RUN,
+          read(missing),
+          [],
+          { read: false, reason: 'HTTP 404: Not Found' },
+          EXPECTED,
+        ).violations,
+      ]),
+    ).toEqual([
+      'lint: no verdict line in the log',
+      'run 32298949382: gh reported no jobs for this run',
+      'run 32298949382: its warning annotations could not be read: HTTP 404: Not Found',
     ])
   })
 })
