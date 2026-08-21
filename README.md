@@ -8,8 +8,8 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-21 · a table's own code, on a page a phone loads. Read only —
-nothing takes an order.
+**Status:** 2026-08-21 · the API takes an order, under a policy that scopes it.
+The guest's page still only reads.
 
 ## What happens at the table
 
@@ -25,11 +25,15 @@ GET /restaurants/blue-door/menu
 {
   "restaurant": { "slug": "blue-door", "name": "The Blue Door" },
   "items": [
-    { "name": "Flat white", "priceMinor": 300, "currency": "GBP" },
-    { "name": "Cinnamon bun", "priceMinor": 450, "currency": "GBP" }
+    { "id": "8f14e45f-ceea-467a-9f0b-2c2e0a3f7c31", "name": "Flat white", "priceMinor": 300, "currency": "GBP" },
+    { "id": "c9f0f895-fb98-4b3f-a4d4-7f0a1f1a2b3c", "name": "Cinnamon bun", "priceMinor": 450, "currency": "GBP" }
   ]
 }
 ```
+
+Each item carries an id, because an order has to name a line by something and a
+name is not unique within a restaurant. It identifies a row and authorises
+nothing.
 
 Items the restaurant has marked unavailable are left out, and the rest come
 back in the order the restaurant chose. Prices are an integer count of the
@@ -52,7 +56,7 @@ GET /tables/9f3c1a7b20de/menu
   "restaurant": { "slug": "blue-door", "name": "The Blue Door" },
   "table": { "label": "Table 7" },
   "items": [
-    { "name": "Flat white", "priceMinor": 300, "currency": "GBP" }
+    { "id": "8f14e45f-ceea-467a-9f0b-2c2e0a3f7c31", "name": "Flat white", "priceMinor": 300, "currency": "GBP" }
   ]
 }
 ```
@@ -65,6 +69,32 @@ number anyone can count to is an address anyone can construct, which costs
 nothing today and costs someone else's order once a code says where the food
 goes. It is not a secret, though. It is printed on a table in a public room,
 and holding it authorises nothing.
+
+That table can also be ordered at:
+
+```
+POST /tables/9f3c1a7b20de/orders
+
+{
+  "submissionId": "6c2e1b40-9f3a-4d2e-8a1b-5f7c9e0d3a24",
+  "lines": [{ "menuItemId": "8f14e45f-ceea-467a-9f0b-2c2e0a3f7c31", "quantity": 2 }]
+}
+```
+
+```json
+{ "order": { "id": "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed" } }
+```
+
+The submission id is minted by whoever is sending, and it is what makes a resend
+one order rather than two: send it again from a flaky connection or a second tab
+and the answer is the same `201` with the same order id, and nothing further is
+written. Send the same submission id at a *different* table and it is refused
+`409` — that is a collision, not a retry, and answering it would hand a guest at
+one table a confirmation for food going to another.
+
+A line naming an item that is not on that restaurant's menu is refused `422` and
+nothing at all is written, not even the lines that were fine. A code no table
+uses is `404`, as it is for the menu.
 
 A guest opens `/t/9f3c1a7b20de` on their phone and gets that menu as a page:
 
@@ -84,10 +114,13 @@ image, analytics or beacon from anywhere else — and what says so is not a
 promise in this file, it is a browser test that loads the built page and
 inspects every request it made.
 
-The page is read only. A guest opens their own table and the page names it, but
-there is no session, no order, and no button that could start one. A table is a
-row in the schema, not a record of anyone's visit: nothing yet groups what one
-sitting ordered, and nothing is written when a guest arrives.
+**The page is still read only.** A guest opens their own table, the page names
+it, and there is no control that could send any of the above. The order path is
+the API's; the page's half is next.
+
+Nothing is written when a guest *arrives*, either. A table is a row in the
+schema, not a record of anyone's visit, and there is still no sitting: what
+groups an order is the table it was placed at and the time it was placed.
 
 An address the page cannot serve says which kind it is. A code no table uses,
 and a code the address cannot hold at all, both send the guest to a member of
@@ -96,12 +129,14 @@ says to try again instead.
 
 ### Next
 
-1. Guests will build an order and send it. Sending it twice, from a flaky
-   connection or a second tab, will produce one order rather than two, and that
-   is where a sitting starts being recorded.
+1. The page will build an order and send it, minting the submission id and
+   keeping it across a reload, so that the guest's retry is the same retry the
+   API already tolerates.
 2. The kitchen will see the ticket. A kitchen client that drops off the network
    will be able to reconnect and pick up where it left off.
 3. Staff will be able to see what each table has ordered and what is still open.
+4. The read path will move under the policy too, so that a menu query stops
+   carrying its own scope.
 
 ## How a menu request is served
 
@@ -131,6 +166,43 @@ The response schema is the contract rather than a description of one. A column
 that starts coming back from the query cannot reach a guest unless the schema
 names it.
 
+## How an order is taken
+
+Nothing on the guest's page sends this yet. What does is one transaction, and
+what makes it safe is that no statement in it carries a restaurant of its own.
+
+```
+  whatever is sending      POST /tables/9f3c1a7b20de/orders
+        │                  { submissionId, lines: [{ menuItemId, quantity }] }
+        ▼
+  Fastify route ─────────  services/api/src/features/order/routes.ts
+        │   the body is validated against the route's JSON Schema
+        ▼   a shape it rejects → 400, before a connection is taken
+  one transaction ───────  services/api/src/features/order/sql.ts
+        │   the code resolves to a restaurant and a table — the one unscoped
+        │   read, and the only statement here with no restaurant to scope by
+        ▼   set_config('app.restaurant_id', that restaurant, local)
+  the policies ──────────  services/api/migrations/0003-*.up.sql
+        │   every statement after it is checked against that restaurant, by
+        │   table_order_scope and table_order_line_scope rather than by a
+        ▼   where clause anyone could forget
+  PostgreSQL
+        │   a row outside the scope is refused, not filtered · a line naming
+        ▼   another restaurant's item fails a composite key → 422
+  201 { order: { id } }
+```
+
+The application connects as `table_ordering_app`, which owns nothing and is not
+a superuser. That is not a detail: PostgreSQL exempts a table's owner from its
+own policies and exempts a superuser from them unconditionally, so a process
+connected as the role that ran the migrations would write orders with every
+policy in the schema enforcing nothing, and every test would still pass
+([ADR 0020](docs/adr/0020-scope-a-write-with-row-level-security.md)).
+
+A statement that establishes no scope at all is refused rather than quietly
+narrowed: `current_setting` raises on a connection that has never carried the
+setting, and the empty string it reverts to afterwards fails the `::uuid` cast.
+
 ## Why
 
 Every table-ordering product I looked at wanted a percentage of card volume, a
@@ -152,8 +224,10 @@ it is started.
 | Guest menu, over HTTP | Done |
 | A page the guest's phone loads | Done |
 | A table's own code, on the guest's page | Done |
-| Order submission that tolerates retries | Planned |
-| Row-level security, so scope is not the query's job | Planned |
+| Order submission over HTTP, tolerating retries | Done |
+| Row-level security on a write, so scope is not the query's job | Done |
+| The guest's page sends the order | Planned |
+| Row-level security on a read, so a menu query drops its scope too | Planned |
 | Kitchen board | Planned |
 | Payment, as an option rather than a requirement | Planned |
 
@@ -218,8 +292,37 @@ curl -s localhost:3000/tables/9f3c1a7b20de/menu
 ```
 
 ```json
-{"restaurant":{"slug":"blue-door","name":"The Blue Door"},"table":{"label":"Table 7"},"items":[{"name":"Flat white","priceMinor":300,"currency":"GBP"}]}
+{"restaurant":{"slug":"blue-door","name":"The Blue Door"},"table":{"label":"Table 7"},"items":[{"id":"8f14e45f-ceea-467a-9f0b-2c2e0a3f7c31","name":"Flat white","priceMinor":300,"currency":"GBP"}]}
 ```
+
+The API connects as `table_ordering_app`, not as `table_ordering`. The migration
+above creates that role and grants it `usage` on the schema, which is why there
+is no step here for it. Against a schema that predates that migration the
+connection still succeeds and the query does not: with no `usage`, the schema
+drops out of the role's `search_path` and PostgreSQL answers `relation
+"restaurant" does not exist`, which reads like a missing table and is a missing
+grant.
+
+Order from that menu, taking the item's id out of what it just answered and
+minting a submission id the same way the table's code was minted:
+
+```sh
+item=$(curl -s localhost:3000/tables/9f3c1a7b20de/menu | sed 's/.*"items":\[{"id":"\([^"]*\)".*/\1/')
+submission=$(uuidgen | tr 'A-Z' 'a-z')
+
+curl -s -X POST localhost:3000/tables/9f3c1a7b20de/orders \
+  -H 'content-type: application/json' \
+  -d "{\"submissionId\":\"$submission\",\"lines\":[{\"menuItemId\":\"$item\",\"quantity\":2}]}"
+```
+
+```json
+{"order":{"id":"1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed"}}
+```
+
+Run that second command again with the same `$submission` and it answers the
+same id, and the order is still one order with one line. Change
+`9f3c1a7b20de` to another table's code while keeping `$submission` and it
+answers `409`.
 
 The page a guest opens is a second process in development:
 
@@ -344,12 +447,45 @@ each with the alternatives that were rejected and why.
 - [0017 Check the procedure by running it, not by matching its text](docs/adr/0017-check-the-procedure-by-running-it.md)
 - [0018 Pick a revision's newest run, and extract only a picking that fails silently](docs/adr/0018-pick-a-revisions-newest-run.md)
 - [0019 Take the action release that ends the Node 20 notice, and report a run's warnings without asserting them](docs/adr/0019-report-a-runs-warnings-without-asserting-them.md)
+- [0020 Scope a write with row-level security, carried on the transaction](docs/adr/0020-scope-a-write-with-row-level-security.md)
+- [0021 Record an order as a submission with lines, and nothing else](docs/adr/0021-record-an-order-as-a-submission-with-lines.md)
 
 ## Known limitations
 
 - The guest page is read only. It renders a table's menu and stops there: no
-  session, no order, and no control that could begin one. A table is furniture
-  in the schema; nothing records that anyone sat at it.
+  control that could send the order the API is now able to take. The submission
+  id, the quantity control and the retry a guest actually makes are the next
+  slice.
+- Nothing reads an order. It is written, it is scoped, and no route selects one
+  — so the only thing that has ever looked at a stored order is the check that
+  asserts it was stored correctly.
+- Row-level security covers what an order writes and nothing else. `restaurant`,
+  `restaurant_table` and `menu_item` carry no policy, so on a read the scope is
+  still the query's job, exactly as it was.
+- **A menu item that has been ordered cannot be removed from the menu.** The
+  order line's foreign key to `menu_item` is `NO ACTION`, so the delete is
+  refused. Deleting the whole restaurant is refused too, and by the same
+  constraint: the cascade into `menu_item` is blocked before the cascade into
+  `table_order` can clear the lines. Both were run rather than reasoned about.
+  For a menu that changes seasonally this bites long before anything about money
+  does, and the repair is the price and name snapshot
+  ([ADR 0021](docs/adr/0021-record-an-order-as-a-submission-with-lines.md))
+  which would make the key droppable.
+- An order records no price. A menu price that moves leaves an older order
+  unpriceable, which costs nothing while nothing is deployed and there are no
+  rows to lose.
+- A resend carrying the same submission id but different lines answers with the
+  first order's id and does not record the new lines. Nothing compares them:
+  the submission id identifies the request, and the answer is what that request
+  produced.
+- The application role's development password is a literal in
+  `0003-create-table-order.up.sql`, public in this repository, and that
+  migration creates the role in whatever database it is applied to. A deployment
+  creates `table_ordering_app` itself, with a real secret, **before** running
+  the migration — the migration's exception clause then finds it and leaves it
+  alone — and passes its own connection string in `DATABASE_URL`.
+- The down migration does not drop that role. A role is cluster-wide, so
+  dropping it would reach every other schema in the same cluster.
 - A table's code cannot be revoked without reprinting the card it is on, and
   nothing in the schema or the route makes a code hard to guess — the pattern
   would accept `table001`. That property lives entirely in how the code is

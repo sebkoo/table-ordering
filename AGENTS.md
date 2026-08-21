@@ -29,7 +29,18 @@ that creates the thing it governs.
   4217 code. Never a float, never a decimal string, in the schema or on the
   wire.
 - A restaurant's rows are read only through a query scoped to that restaurant.
-  Row-level security is not in place, so the scope is the query's job.
+  Row-level security is not on the read path, so on a read the scope is the
+  query's job.
+- A write is scoped by a policy, not by the statement. The scope is set once on
+  the transaction, from the row a printed code resolved to, and a statement that
+  runs without it is refused rather than silently widened or narrowed.
+- The application connects as a role the policy applies to: not the owner of the
+  tables and not a superuser, both of which PostgreSQL exempts, and a superuser
+  even from `FORCE`. Every check that asserts a policy connects the way the
+  application does.
+- A row naming two of a restaurant's rows names them through one composite
+  foreign key, so a child cannot point at a parent in another restaurant while
+  every single-column key is satisfied.
 - One query resolves a printed code to the restaurant that owns it, and it is
   the only one with no restaurant to scope by. Every query after it is scoped by
   the restaurant it returned, never by anything the caller sent.

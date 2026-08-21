@@ -14,6 +14,7 @@
 export const MENU_FOR_RESTAURANT = `
   select
     restaurant.name as restaurant_name,
+    menu_item.id as item_id,
     menu_item.name as item_name,
     menu_item.price_minor,
     menu_item.currency
@@ -28,6 +29,8 @@ export const MENU_FOR_RESTAURANT = `
 /** One row of {@link MENU_FOR_RESTAURANT}. The item columns are null when the restaurant has no available item. */
 export type MenuRow = {
   restaurant_name: string
+  /** What an order names a line by. A menu that did not carry it could not be ordered from. */
+  item_id: string | null
   item_name: string | null
   price_minor: number | null
   currency: string | null
@@ -53,6 +56,7 @@ export const MENU_FOR_TABLE = `
     restaurant.slug as restaurant_slug,
     restaurant.name as restaurant_name,
     restaurant_table.label as table_label,
+    menu_item.id as item_id,
     menu_item.name as item_name,
     menu_item.price_minor,
     menu_item.currency

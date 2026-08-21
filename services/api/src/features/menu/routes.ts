@@ -40,8 +40,13 @@ const ITEMS = {
   type: 'array',
   items: {
     type: 'object',
-    required: ['name', 'priceMinor', 'currency'],
+    required: ['id', 'name', 'priceMinor', 'currency'],
     properties: {
+      // The id is here because an order has to name a line by something, and a
+      // name is not unique within a restaurant. It identifies a row and
+      // authorises nothing: `POST /tables/:code/orders` accepts it only for an
+      // item the resolved restaurant serves.
+      id: { type: 'string' },
       name: { type: 'string' },
       priceMinor: { type: 'integer' },
       currency: { type: 'string' },
@@ -105,8 +110,14 @@ const TABLE_MENU_SCHEMA = {
 function availableItems(rows: readonly MenuRow[]) {
   const items = []
   for (const row of rows) {
-    if (row.item_name === null || row.price_minor === null || row.currency === null) continue
-    items.push({ name: row.item_name, priceMinor: row.price_minor, currency: row.currency })
+    if (row.item_id === null || row.item_name === null) continue
+    if (row.price_minor === null || row.currency === null) continue
+    items.push({
+      id: row.item_id,
+      name: row.item_name,
+      priceMinor: row.price_minor,
+      currency: row.currency,
+    })
   }
   return items
 }

@@ -34,15 +34,28 @@ const here = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(here, '..', '..', '..', '..', '..')
 const GUEST = join(ROOT, 'apps', 'guest')
 const API_ENTRY = join(ROOT, 'services', 'api', 'src', 'main.ts')
-const MIGRATIONS = ['0001-create-menu.up.sql', '0002-create-restaurant-table.up.sql'].map((name) =>
-  join(ROOT, 'services', 'api', 'migrations', name),
-)
+const MIGRATIONS = [
+  '0001-create-menu.up.sql',
+  '0002-create-restaurant-table.up.sql',
+  // Applied although nothing here orders anything: it is the migration that
+  // creates the role the API below connects as, and grants it the menu tables.
+  '0003-create-table-order.up.sql',
+].map((name) => join(ROOT, 'services', 'api', 'migrations', name))
 
-/** The credentials and published port in `compose.yaml`, as `services/api/src/main.ts` also carries them. */
-const DEFAULT_DATABASE_URL =
+/** The credentials and published port in `compose.yaml`. This role owns the tables and seeds them. */
+const OWNER_DATABASE_URL =
   'postgres://table_ordering:table_ordering_dev@127.0.0.1:55432/table_ordering'
 
-const CONNECTION_STRING = process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL
+/**
+ * The role the API connects as, from `0003-create-table-order.up.sql`, matching
+ * `DEFAULT_DATABASE_URL` in `services/api/src/main.ts`. The child below is given
+ * this rather than the owner's credentials, because a policy does not apply to a
+ * table's owner and an API started as one is not the API a guest reaches.
+ */
+const APP_ROLE = 'table_ordering_app'
+const APP_PASSWORD = 'table_ordering_app_dev'
+
+const CONNECTION_STRING = process.env.DATABASE_URL ?? OWNER_DATABASE_URL
 const SCHEMA = `guest_page_test_${process.pid}`
 const SLUG = 'blue-door'
 
@@ -135,6 +148,8 @@ beforeAll(async () => {
   // search_path travels in the connection string, so the child needs no
   // knowledge of the throwaway schema beyond the URL it is given.
   const url = new URL(CONNECTION_STRING)
+  url.username = APP_ROLE
+  url.password = APP_PASSWORD
   url.searchParams.set('options', `-c search_path=${SCHEMA}`)
   api = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', API_ENTRY], {
     env: { ...process.env, DATABASE_URL: url.href, PORT: '0' },

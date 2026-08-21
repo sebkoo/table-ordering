@@ -12,14 +12,26 @@ import { fileURLToPath } from 'node:url'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { Pool } from 'pg'
 import { menuRoutes } from './features/menu/routes.ts'
+import { orderRoutes } from './features/order/routes.ts'
 
-/** The credentials and published port in `compose.yaml`, so a fresh clone needs no environment file. */
+/**
+ * The application role, not the one that owns the tables.
+ *
+ * PostgreSQL exempts a table's owner from its own policies, and exempts a
+ * superuser unconditionally -- `compose.yaml`'s `table_ordering` is both. A
+ * connection as that role would write orders with every policy in the schema
+ * enforcing nothing, so this process connects as `table_ordering_app`, which
+ * `0003-create-table-order.up.sql` creates and grants. The port is the one
+ * `compose.yaml` publishes; the password is a development literal from that
+ * migration, and a deployment supplies its own through `DATABASE_URL`.
+ */
 export const DEFAULT_DATABASE_URL =
-  'postgres://table_ordering:table_ordering_dev@127.0.0.1:55432/table_ordering'
+  'postgres://table_ordering_app:table_ordering_app_dev@127.0.0.1:55432/table_ordering'
 
 export function buildApp(pool: Pool): FastifyInstance {
   const app = Fastify()
   app.register(menuRoutes(pool))
+  app.register(orderRoutes(pool))
   return app
 }
 
