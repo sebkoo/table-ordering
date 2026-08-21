@@ -337,6 +337,112 @@ export function runVerifiedReport(
 }
 
 // ---------------------------------------------------------------------------
+// Picking the run a revision's report is about
+// ---------------------------------------------------------------------------
+
+/** A run as `gh run list --json databaseId,headSha,status,createdAt` returns it. */
+export type Run = {
+  databaseId: number
+  headSha: string
+  status: string
+  createdAt: string
+}
+
+/** The run to report on, or every reason there is not one. */
+export type Picked = { run: Run } | { violations: Violation[] }
+
+/**
+ * The run whose log `run-verified` reads, chosen from the ones `gh run list`
+ * returned.
+ *
+ * A revision can have more than one run -- a re-run, a re-dispatch -- and the
+ * newest is the one that counts, because this reports what CI most recently
+ * said about the revision. An older PASS does not survive a newer FAIL.
+ *
+ * Newest by `createdAt` and not by position, although `gh` does happen to list
+ * newest first. That ordering is documented nowhere, and depending on it would
+ * tie the answer to another project's undocumented behaviour the way printing
+ * `2m27s` would tie the timings above to its display format. It would also put
+ * the property out of reach: with the order load-bearing, a fixture in the
+ * other order has to expect the other run, so the suite would certify the
+ * dependency instead of forbidding it.
+ *
+ * `limit` is what was asked of the server and `runs.length` is what came back.
+ * Holding both is the only way to tell "there is no such run" from "this did
+ * not look far enough" -- different facts, which send a reader to different
+ * places.
+ */
+export function runForRevision(runs: readonly Run[], revision: string, limit: number): Picked {
+  const matches = runs.filter((candidate) => candidate.headSha === revision)
+
+  if (matches.length === 0) {
+    return {
+      violations: [
+        {
+          where: revision,
+          detail:
+            runs.length < limit
+              ? `no workflow run for this revision; the ${runs.length} on ${BRANCH} are all there are`
+              : `no workflow run for this revision among the last ${limit} on ${BRANCH}, which is as far as this looked`,
+        },
+      ],
+    }
+  }
+
+  // Before any comparison of them. A field the `--json` list stopped asking for
+  // arrives as `undefined`, which every ordering would silently sort somewhere.
+  for (const match of matches) {
+    if (Number.isNaN(Date.parse(match.createdAt))) {
+      return {
+        violations: [
+          {
+            where: `run ${match.databaseId}`,
+            detail: `a createdAt gh returned is not a date: ${match.createdAt}`,
+          },
+        ],
+      }
+    }
+  }
+
+  const newest = matches.reduce((left, right) =>
+    Date.parse(right.createdAt) > Date.parse(left.createdAt) ? right : left,
+  )
+
+  // A tie would otherwise be settled by input order, which is gh's order -- the
+  // property this function exists to stop depending on. Breaking it by run id
+  // would only trade one undocumented property for another, so a tie is
+  // reported rather than resolved. The ids are sorted, so the message reads the
+  // same whichever order the two arrived in.
+  const tied = matches.filter(
+    (match) => Date.parse(match.createdAt) === Date.parse(newest.createdAt),
+  )
+  if (tied.length > 1) {
+    const ids = tied.map((match) => match.databaseId).sort((left, right) => left - right)
+    return {
+      violations: [
+        {
+          where: revision,
+          detail: `${ids.length} runs share the newest createdAt ${newest.createdAt}: ${ids.join(', ')}`,
+        },
+      ],
+    }
+  }
+
+  if (newest.status !== 'completed') {
+    return {
+      violations: [
+        {
+          where: `run ${newest.databaseId}`,
+          detail: `is ${newest.status}; wait for it to complete`,
+        },
+      ],
+    }
+  }
+
+  return { run: newest }
+}
+
+// ---------------------------------------------------------------------------
 // The revision, and the metadata
 // ---------------------------------------------------------------------------
 
@@ -513,8 +619,6 @@ function readRemoteRef(): { ok: true; ref: RemoteRef } | { ok: false; reason: st
   return { ok: true, ref: { present: true, revision: (line.split('\t')[0] ?? '').trim() } }
 }
 
-type Run = { databaseId: number; headSha: string; status: string }
-
 function checkRun(revision: string): CheckReport {
   const listed = gh([
     'run',
@@ -524,7 +628,7 @@ function checkRun(revision: string): CheckReport {
     '--limit',
     String(RUN_SEARCH_LIMIT),
     '--json',
-    'databaseId,headSha,status',
+    'databaseId,headSha,status,createdAt',
   ])
 
   if (listed.status !== 0) {
@@ -538,21 +642,9 @@ function checkRun(revision: string): CheckReport {
     return fail('run-verified', [{ where: 'gh run list', detail: `unreadable: ${String(error)}` }])
   }
 
-  const run = runs.find((candidate) => candidate.headSha === revision)
-  if (run === undefined) {
-    return fail('run-verified', [
-      {
-        where: revision,
-        detail: `no workflow run for this revision among the last ${runs.length} on ${BRANCH}`,
-      },
-    ])
-  }
-
-  if (run.status !== 'completed') {
-    return fail('run-verified', [
-      { where: `run ${run.databaseId}`, detail: `is ${run.status}; wait for it to complete` },
-    ])
-  }
+  const picked = runForRevision(runs, revision, RUN_SEARCH_LIMIT)
+  if ('violations' in picked) return fail('run-verified', picked.violations)
+  const run = picked.run
 
   const viewed = gh(['run', 'view', String(run.databaseId), '--log'])
   const log: RunLog =

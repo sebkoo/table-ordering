@@ -8,7 +8,7 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-20 · a table's own code, on a page a phone loads. Read only —
+**Status:** 2026-08-21 · a table's own code, on a page a phone loads. Read only —
 nothing takes an order.
 
 ## What happens at the table
@@ -333,6 +333,7 @@ each with the alternatives that were rejected and why.
 - [0015 Apply the second migration by hand, and defer the runner to a named trigger](docs/adr/0015-apply-the-second-migration-by-hand.md)
 - [0016 Make every run step atomic, and check the flag rather than restate it](docs/adr/0016-make-every-run-step-atomic.md)
 - [0017 Check the procedure by running it, not by matching its text](docs/adr/0017-check-the-procedure-by-running-it.md)
+- [0018 Pick a revision's newest run, and extract only a picking that fails silently](docs/adr/0018-pick-a-revisions-newest-run.md)
 
 ## Known limitations
 
@@ -372,11 +373,11 @@ each with the alternatives that were rejected and why.
   for a limited period, and after that the run cannot be verified this way. The
   check reports that the log could not be read, rather than reporting a run that
   printed nothing it recognised.
-- `pnpm check-push`'s CLI half is reached by no test. It picks the run for a
-  revision with a second whole-revision comparison, and the suite that pins the
-  first one cannot see it. The boundary between the tested half and this one is
-  drawn by a header comment and nothing else, so a comparison can cross it
-  without anything noticing.
+- `pnpm check-push`'s CLI half is reached by no test. It fetches the run list,
+  the log and the job times and parses each, and no fixture can see which
+  arguments those calls carry. The boundary between that half and the tested one
+  is drawn by a header comment and nothing else, so code can cross it without
+  anything noticing.
 - `readme-status-date`'s subject count has never been observed independently of
   `commit-message-policy`'s: every commit so far has touched README. The first
   commit that leaves README alone is the first run that can tell them apart.

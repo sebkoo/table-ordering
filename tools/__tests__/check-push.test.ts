@@ -32,7 +32,9 @@ import {
   metadataViolations,
   parseArgs,
   pushArrivedViolations,
+  type Run,
   type RunLog,
+  runForRevision,
   runVerifiedReport,
   runVerifiedViolations,
   skipReport,
@@ -311,6 +313,184 @@ describe('how long the jobs of a run took', () => {
         { startedAt: '2026-08-20T20:00:10Z', completedAt: '2026-08-20T20:00:50Z' },
       ]),
     ).toEqual({ ok: true, seconds: 50 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+/**
+ * What `gh run list --branch main --limit 30 --json
+ * databaseId,headSha,status,createdAt` really returned, verbatim: one line,
+ * fourteen runs, the fields in the order gh emitted them.
+ *
+ * Two revisions in it carry two runs each -- `f286bde` and `77ba1ec` were both
+ * re-run -- so the case a revision has more than one run is asserted over real
+ * data rather than over a pair invented to make the point. The four revisions
+ * used below sit first, fifth, sixth and last, so an implementation that takes
+ * `runs[0]` or the final entry answers three of them wrongly.
+ */
+const CAPTURE = `[{"createdAt":"2026-08-20T22:52:11Z","databaseId":32426186935,"headSha":"b9eab501c30f1afaafb602eac6d266b4292596b1","status":"completed"},{"createdAt":"2026-08-20T20:48:52Z","databaseId":32416115120,"headSha":"094baff17ac659eb784cff872a24f1936afbf582","status":"completed"},{"createdAt":"2026-08-20T18:03:53Z","databaseId":32401110084,"headSha":"8f1aec5107f9cab253af5f4b7223e4e750dfe7a0","status":"completed"},{"createdAt":"2026-08-20T15:56:48Z","databaseId":32389146864,"headSha":"bad503cf7ec07ccea51faea6bf2868f494507dd4","status":"completed"},{"createdAt":"2026-08-20T04:27:04Z","databaseId":32331932767,"headSha":"f286bde00c50842dcca7130c9c9f3365f1d39596","status":"completed"},{"createdAt":"2026-08-20T04:22:24Z","databaseId":32331648860,"headSha":"77ba1ec26c386c145dfe0ef0a6201ff4a197dff4","status":"completed"},{"createdAt":"2026-08-20T04:19:19Z","databaseId":32331452874,"headSha":"74cca28204aa887e94db7e31d247d4d8854e6e28","status":"completed"},{"createdAt":"2026-08-20T04:17:25Z","databaseId":32331337835,"headSha":"f286bde00c50842dcca7130c9c9f3365f1d39596","status":"completed"},{"createdAt":"2026-08-19T22:35:43Z","databaseId":32309526375,"headSha":"77ba1ec26c386c145dfe0ef0a6201ff4a197dff4","status":"completed"},{"createdAt":"2026-08-19T21:27:49Z","databaseId":32303992200,"headSha":"62fdd00557c004d33ecd175734fc8781f6b42d1e","status":"completed"},{"createdAt":"2026-08-19T20:31:02Z","databaseId":32298949382,"headSha":"7a1d0a55f55fae8cda4eb672ec5ded9d58591656","status":"completed"},{"createdAt":"2026-08-19T18:01:49Z","databaseId":32285023402,"headSha":"8425908628daced177f50e23227e4cbcc626f165","status":"completed"},{"createdAt":"2026-08-19T05:56:37Z","databaseId":32221354380,"headSha":"49c3f82be95d4dcdc9e812d5b8f0682b20db99c2","status":"completed"},{"createdAt":"2026-08-19T04:45:18Z","databaseId":32216903525,"headSha":"780a8f0fc5e34c2fcb74ee22b738a248cf6d647c","status":"completed"}]`
+
+const RUNS = JSON.parse(CAPTURE) as Run[]
+
+/** What `check-push` asks `gh run list` for, which is not what it gets back. */
+const LIMIT = 30
+
+const NEWEST = 'b9eab501c30f1afaafb602eac6d266b4292596b1'
+/** Re-run, twice over: the two revisions the capture holds two runs each for. */
+const RERUN = 'f286bde00c50842dcca7130c9c9f3365f1d39596'
+const RERUN_AGAIN = '77ba1ec26c386c145dfe0ef0a6201ff4a197dff4'
+const OLDEST = '780a8f0fc5e34c2fcb74ee22b738a248cf6d647c'
+
+function reversed(runs: readonly Run[]): Run[] {
+  return [...runs].reverse()
+}
+
+/** The chosen run's id, or the differences that stopped one being chosen. */
+function picked(runs: readonly Run[], revision: string, limit = LIMIT): number | string[] {
+  const result = runForRevision(runs, revision, limit)
+  return 'run' in result ? result.run.databaseId : details([...result.violations])
+}
+
+describe('the run a revision is reported on', () => {
+  it('picks the run for a revision, wherever in the list it sits', () => {
+    expect(picked(RUNS, NEWEST)).toBe(32426186935)
+    expect(picked(RUNS, RERUN)).toBe(32331932767)
+    expect(picked(RUNS, RERUN_AGAIN)).toBe(32331648860)
+    expect(picked(RUNS, OLDEST)).toBe(32216903525)
+  })
+
+  // The same list, the other way up. `gh` documents no ordering, so this is a
+  // shape the collector may produce -- which is what makes the condition
+  // legitimate rather than decorative. An answer that moves when the order does
+  // is an answer that depends on the order, and the two re-run revisions are
+  // where that shows: their two runs swap places here.
+  it('gives the same four answers from the same list reversed', () => {
+    const backwards = reversed(RUNS)
+
+    expect(picked(backwards, NEWEST)).toBe(32426186935)
+    expect(picked(backwards, RERUN)).toBe(32331932767)
+    expect(picked(backwards, RERUN_AGAIN)).toBe(32331648860)
+    expect(picked(backwards, OLDEST)).toBe(32216903525)
+  })
+})
+
+/**
+ * The width of the comparison, which the capture above cannot establish: every
+ * revision in it differs from every other at character zero, so a comparison
+ * truncated anywhere still separates them and every condition above stays green.
+ *
+ * So this pair is constructed. The invariant is about the shape the collector
+ * produces, not about how likely a value is, and gh emits forty hex characters
+ * whatever they spell.
+ *
+ * The decoy is *newer* than the target, and that is the whole of the trap. Under
+ * a comparison truncated to seven characters the match set widens to both runs,
+ * and the newest of the two is then the decoy -- so the wrong id comes back.
+ * Were the decoy older, the widened set would still yield the target as newest
+ * and the truncation would pass unseen.
+ */
+const TARGET = '7a1d0a55f55fae8cda4eb672ec5ded9d58591656'
+const DECOY = `${TARGET.slice(0, -1)}7`
+
+const WIDTH: Run[] = [
+  {
+    databaseId: 32298949999,
+    headSha: DECOY,
+    status: 'completed',
+    createdAt: '2026-08-19T21:00:00Z',
+  },
+  {
+    databaseId: 32298949382,
+    headSha: TARGET,
+    status: 'completed',
+    createdAt: '2026-08-19T20:31:02Z',
+  },
+]
+
+describe('how much of a revision is compared', () => {
+  it('tells two revisions apart through their fortieth character', () => {
+    expect(picked(WIDTH, TARGET)).toBe(32298949382)
+    expect(picked(reversed(WIDTH), TARGET)).toBe(32298949382)
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('a revision whose newest run cannot be chosen', () => {
+  // Reported rather than resolved. Input order is gh's order, which is the
+  // property this is here to stop depending on, and a run-id tiebreak would
+  // only trade it for another. The message names both, sorted, so it reads the
+  // same whichever order the two arrived in.
+  it('reports a tie on the newest createdAt, naming both runs, in either order', () => {
+    const stamp = '2026-08-20T04:27:04Z'
+    const tied: Run[] = [
+      { databaseId: 32331932767, headSha: RERUN, status: 'completed', createdAt: stamp },
+      { databaseId: 32331337835, headSha: RERUN, status: 'completed', createdAt: stamp },
+    ]
+    const expected = [
+      `${RERUN}: 2 runs share the newest createdAt 2026-08-20T04:27:04Z: 32331337835, 32331932767`,
+    ]
+
+    expect(picked(tied, RERUN)).toEqual(expected)
+    expect(picked(reversed(tied), RERUN)).toEqual(expected)
+  })
+
+  // The older run is green and is not the answer. A re-run exists because
+  // somebody did not believe the first one, so an older PASS does not survive a
+  // newer verdict that has not arrived yet.
+  it('names the newest and its status, though an older completed run is there', () => {
+    const running: Run[] = [
+      {
+        databaseId: 32331932767,
+        headSha: RERUN,
+        status: 'in_progress',
+        createdAt: '2026-08-20T04:27:04Z',
+      },
+      {
+        databaseId: 32331337835,
+        headSha: RERUN,
+        status: 'completed',
+        createdAt: '2026-08-20T04:17:25Z',
+      },
+    ]
+    const expected = ['run 32331932767: is in_progress; wait for it to complete']
+
+    expect(picked(running, RERUN)).toEqual(expected)
+    expect(picked(reversed(running), RERUN)).toEqual(expected)
+  })
+
+  // What a `--json` list that stopped asking for the field produces. Every
+  // ordering would sort `undefined` somewhere and answer with a straight face.
+  it('fails on a createdAt gh did not return as a date, naming it', () => {
+    const undated: Run[] = [
+      { databaseId: 32426186935, headSha: NEWEST, status: 'completed', createdAt: '' },
+    ]
+
+    expect(picked(undated, NEWEST)).toEqual([
+      'run 32426186935: a createdAt gh returned is not a date: ',
+    ])
+  })
+})
+
+describe('a revision with no run in the list', () => {
+  const absent = '0'.repeat(40)
+
+  // Two facts, not one. The server returned fourteen when thirty were asked
+  // for, so there is nothing further back to look at.
+  it('says the list is everything there is, when the window did not fill', () => {
+    expect(picked(RUNS, absent)).toEqual([
+      `${absent}: no workflow run for this revision; the 14 on main are all there are`,
+    ])
+  })
+
+  // And a full window says the opposite: the run may be there, further back
+  // than this looked. `780a8f0` really is in the capture, five entries short of
+  // this slice.
+  it('says how far it looked, when the window filled', () => {
+    expect(picked(RUNS.slice(0, 5), OLDEST, 5)).toEqual([
+      `${OLDEST}: no workflow run for this revision among the last 5 on main, which is as far as this looked`,
+    ])
   })
 })
 
