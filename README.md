@@ -387,6 +387,24 @@ have no such dependency and run either way. Pass `--require-environment` to turn
 those skips into failures — CI does, because CI provisions both, and a skip
 there would mean the provisioning silently stopped working.
 
+Each test step also says what each of its files cost:
+
+```
+test-api ......... PASS  1.2s
+  services/api/src/features/menu/menu.test.ts .... 0.3s
+  services/api/src/features/order/order.test.ts .. 0.4s
+```
+
+so a change that made a run slower can be attributed to the file it landed in,
+rather than to a step total that a startup cost dominates. The figure is the
+module's own — its collection and its hooks as well as its assertions — read
+from the report vitest is asked to write beside its readable output.
+
+Nothing fails because one of those numbers moved. There is no threshold and no
+budget: a duration that can fail a build is a flaky build, and the line is worth
+reading only while it means one thing
+([ADR 0024](docs/adr/0024-report-what-each-test-file-cost.md)).
+
 Everything above runs before a commit exists. What the remote holds *after* a
 push is a separate question, and `pnpm check-push` asks it:
 
@@ -463,6 +481,7 @@ each with the alternatives that were rejected and why.
 - [0021 Record an order as a submission with lines, and nothing else](docs/adr/0021-record-an-order-as-a-submission-with-lines.md)
 - [0022 Take a check's inputs from the repository, not from the machine](docs/adr/0022-take-a-checks-inputs-from-the-repository.md)
 - [0023 Mint a submission id per send, and keep it until the API answers](docs/adr/0023-mint-a-submission-id-per-send.md)
+- [0024 Report what each test file cost, and assert nothing about it](docs/adr/0024-report-what-each-test-file-cost.md)
 
 ## Known limitations
 
@@ -534,6 +553,26 @@ each with the alternatives that were rejected and why.
   absent dependency — but it does mean the skip is keyed on absence alone.
 - CI downloads that browser on every run. Caching it is the obvious next move
   and has not been made.
+- The per-file figures a run prints are durations of files that run in
+  parallel, so they neither add up to their step's total nor stay under it: one
+  run here put 11.9s of files inside a `test-guest` step that took 7.8s. No sum
+  is printed, for that reason. A file costing under fifty milliseconds reads
+  `0.0s`, which says only that it is below what the line can show.
+- A file's figure is a property of the machine as much as of the file, so a
+  local reading cannot answer a question about a CI one. `test-tools` runs in
+  2.2–2.6s on CI and 28s here. Two runs back to back on an idle machine agree to
+  within a few per cent; a first run after the machine has been busy does not —
+  `menu.test.ts` read 2.3s cold and 0.3s warm, the same file either way.
+- A test step whose per-file report cannot be read fails, though its suite
+  passed and its exit code was 0. That is deliberate: a check that could not
+  gather its evidence has established nothing, and an instrument that stops
+  working quietly is worse than one that fails loudly. It does mean a
+  temporary-directory problem, or a vitest release that changes the report's
+  shape, reddens a run over something other than the code.
+- `verify` reads that report from a temporary file, and the part of `verify.ts`
+  that writes, reads and removes it is reached by no test — the same boundary as
+  `check-push`'s CLI half below. What the arguments are and what the reading
+  says are both checked; the six lines that carry a file between them are not.
 - Nothing forces `pnpm check-push` to be run. It is a step in the commit
   procedure, not a gate, so a push nobody checked is indistinguishable from one
   that passed.

@@ -229,6 +229,89 @@ describe('the log of the run for a revision', () => {
 // ---------------------------------------------------------------------------
 
 /**
+ * A verbatim capture of `pnpm verify --require-environment`, run locally from
+ * the emitter that prints a line per test file.
+ *
+ * A local run, and labelled as one rather than as the CI run it is not: the
+ * lines are bare, carrying none of `gh run view --log`'s job, step and timestamp
+ * prefix, which the condition above establishes is read the same way. Its
+ * subject counts read 16 because it was taken before the commit that makes them
+ * 17, and its figures are one machine's -- 28.4s for a suite CI runs in 2.5s.
+ *
+ * `GREEN` is not replaced by it. That is a capture of a past run, past runs stay
+ * valid input, and a parser that could only read logs from the current version
+ * would be the worse parser. What the new lines need is an additional case.
+ *
+ * The case is the count. Nine per-file lines are printed here and not one of
+ * them is a verdict line, so this log still yields twelve: six steps and six
+ * rules. That is a decision and not an accident -- a duration is a measurement
+ * and not a judgement, so it carries no verdict word and nothing counts it as
+ * one. Asserting it here is what stops the pattern above being widened later to
+ * admit a name carrying `/`, `.` and `_`, which would take these lines into the
+ * count with nothing to notice.
+ */
+const LOCAL = `$ node --disable-warning=ExperimentalWarning tools/verify.ts --require-environment
+typecheck ........ PASS  0.4s
+typecheck-guest .. PASS  0.2s
+lint ............. PASS  0.2s
+test-tools ....... PASS  28.4s
+  tools/__tests__/check-commit-message.test.ts .. 2.5s
+  tools/__tests__/check-conventions.test.ts ..... 27.7s
+  tools/__tests__/check-push.test.ts ............ 0.0s
+  tools/__tests__/commit-message.test.ts ........ 0.0s
+  tools/__tests__/verify.test.ts ................ 0.2s
+test-api ......... PASS  1.2s
+  services/api/src/features/menu/menu.test.ts .... 0.3s
+  services/api/src/features/order/order.test.ts .. 0.4s
+test-guest ....... PASS  7.8s
+  apps/guest/src/features/menu/menu.browser.test.ts .... 5.2s
+  apps/guest/src/features/order/order.browser.test.ts .. 6.7s
+conventions:
+  readme-status-date ........... PASS  16 subjects
+  commit-message-policy ........ PASS  16 subjects
+  migration-has-down ........... PASS  3 subjects
+  feature-has-test ............. PASS  4 subjects
+  workflow-job-timeout ......... PASS  1 subject
+  run-step-single-transaction .. PASS  2 subjects
+  6 checks: 6 PASS, 0 FAIL, 0 SKIP
+
+verify: PASS  39.3s`
+
+describe('a log carrying a line per test file', () => {
+  // The fixture guard. A capture taken from an emitter that printed no per-file
+  // lines would leave everything below asserting nothing it did not already.
+  it('is read from a capture that really carries them', () => {
+    expect(LOCAL).toContain('  tools/__tests__/check-conventions.test.ts')
+    expect(LOCAL.split('\n').filter((line) => /\.test\.ts \.+ \d/.test(line))).toHaveLength(9)
+  })
+
+  // Twelve, named rather than counted, so a thirteenth arriving says which one
+  // it is instead of moving a number.
+  it('yields the twelve verdict lines and none of the nine file lines', () => {
+    expect(verdictLines(LOCAL).map((line) => line.name)).toEqual([
+      'typecheck',
+      'typecheck-guest',
+      'lint',
+      'test-tools',
+      'test-api',
+      'test-guest',
+      'readme-status-date',
+      'commit-message-policy',
+      'migration-has-down',
+      'feature-has-test',
+      'workflow-job-timeout',
+      'run-step-single-transaction',
+    ])
+  })
+
+  it('reports no difference from the declaration for a green run of it', () => {
+    expect(runVerifiedViolations(read(LOCAL), EXPECTED)).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+/**
  * What the line says when it passes, which until now was written down in
  * README and nowhere else. Both figures were already inside things this check
  * reads -- the elapsed inside the pattern that validates the summary line, the
