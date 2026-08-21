@@ -8,8 +8,8 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-21 · the API takes an order, under a policy that scopes it.
-The guest's page still only reads.
+**Status:** 2026-08-21 · a guest sends their order from the page, and a send
+repeated across a reload is still one order.
 
 ## What happens at the table
 
@@ -102,8 +102,10 @@ A guest opens `/t/9f3c1a7b20de` on their phone and gets that menu as a page:
 The Blue Door
 Table 7
 
-Flat white                                                   £3.00
-Cinnamon bun                                                 £4.50
+Flat white                                        £3.00      [ 2 ]
+Cinnamon bun                                      £4.50      [ 0 ]
+
+                 [ Send to the kitchen ]
 ```
 
 `/r/blue-door` still answers with the same menu and no table, for a restaurant
@@ -114,9 +116,19 @@ image, analytics or beacon from anywhere else — and what says so is not a
 promise in this file, it is a browser test that loads the built page and
 inspects every request it made.
 
-**The page is still read only.** A guest opens their own table, the page names
-it, and there is no control that could send any of the above. The order path is
-the API's; the page's half is next.
+**The page sends it.** A guest raises the quantity on the rows they want and
+sends, and what leaves the page is exactly the request above. The submission id
+is the page's: minted when the guest sends, kept in `sessionStorage` under that
+table's code while the send is unresolved, and retired the moment the API
+answers. So a guest who reloads because they are not sure it went through sends
+the *same* submission again rather than a second one, and a guest who orders a
+second round gets a second order
+([ADR 0023](docs/adr/0023-mint-a-submission-id-per-send.md)).
+
+A send the network refuses says so and offers to try the same submission again.
+A send the API refuses — an item that came off the menu while the guest was
+choosing — says the menu may have changed and leaves the page orderable, because
+nothing was written.
 
 Nothing is written when a guest *arrives*, either. A table is a row in the
 schema, not a record of anyone's visit, and there is still no sitting: what
@@ -129,13 +141,10 @@ says to try again instead.
 
 ### Next
 
-1. The page will build an order and send it, minting the submission id and
-   keeping it across a reload, so that the guest's retry is the same retry the
-   API already tolerates.
-2. The kitchen will see the ticket. A kitchen client that drops off the network
+1. The kitchen will see the ticket. A kitchen client that drops off the network
    will be able to reconnect and pick up where it left off.
-3. Staff will be able to see what each table has ordered and what is still open.
-4. The read path will move under the policy too, so that a menu query stops
+2. Staff will be able to see what each table has ordered and what is still open.
+3. The read path will move under the policy too, so that a menu query stops
    carrying its own scope.
 
 ## How a menu request is served
@@ -168,11 +177,11 @@ names it.
 
 ## How an order is taken
 
-Nothing on the guest's page sends this yet. What does is one transaction, and
-what makes it safe is that no statement in it carries a restaurant of its own.
+The guest's page sends this. What takes it is one transaction, and what makes it
+safe is that no statement in it carries a restaurant of its own.
 
 ```
-  whatever is sending      POST /tables/9f3c1a7b20de/orders
+  the guest's page         POST /tables/9f3c1a7b20de/orders
         │                  { submissionId, lines: [{ menuItemId, quantity }] }
         ▼
   Fastify route ─────────  services/api/src/features/order/routes.ts
@@ -226,7 +235,7 @@ it is started.
 | A table's own code, on the guest's page | Done |
 | Order submission over HTTP, tolerating retries | Done |
 | Row-level security on a write, so scope is not the query's job | Done |
-| The guest's page sends the order | Planned |
+| The guest's page sends the order | Done |
 | Row-level security on a read, so a menu query drops its scope too | Planned |
 | Kitchen board | Planned |
 | Payment, as an option rather than a requirement | Planned |
@@ -336,6 +345,9 @@ table would point at. `http://localhost:5173/r/blue-door` gives the same menu
 with no table. The page asks for the menu at a relative path, and the guest dev
 server proxies `/tables` and `/restaurants` to the API, so the two are on one
 origin.
+
+Raise a quantity on a row and send. That is the same request as the `curl`
+above, under a submission id the page minted for it.
 
 Everything the repository checks runs in one command:
 
@@ -450,13 +462,22 @@ each with the alternatives that were rejected and why.
 - [0020 Scope a write with row-level security, carried on the transaction](docs/adr/0020-scope-a-write-with-row-level-security.md)
 - [0021 Record an order as a submission with lines, and nothing else](docs/adr/0021-record-an-order-as-a-submission-with-lines.md)
 - [0022 Take a check's inputs from the repository, not from the machine](docs/adr/0022-take-a-checks-inputs-from-the-repository.md)
+- [0023 Mint a submission id per send, and keep it until the API answers](docs/adr/0023-mint-a-submission-id-per-send.md)
 
 ## Known limitations
 
-- The guest page is read only. It renders a table's menu and stops there: no
-  control that could send the order the API is now able to take. The submission
-  id, the quantity control and the retry a guest actually makes are the next
-  slice.
+- A guest who opens the printed code a second time can produce two orders for
+  one round. The pending submission lives in `sessionStorage`, which a second
+  opening does not share, so that opening mints an id of its own. It is
+  indistinguishable from a table ordering the same round twice, which is a real
+  thing a restaurant does, so no client can decide it.
+- A send that has not resolved freezes the guest's choices until it does,
+  because it may already have reached the kitchen and a new id for edited lines
+  would order everything twice. The way out without retrying is to close the
+  tab, which takes the stored submission with it.
+- The page cannot say which item a refused order was refused for. The route
+  answers `422` with the fact that an item on the order is not on that menu, and
+  not with which one.
 - Nothing reads an order. It is written, it is scoped, and no route selects one
   — so the only thing that has ever looked at a stored order is the check that
   asserts it was stored correctly.
@@ -532,13 +553,13 @@ each with the alternatives that were rejected and why.
 - `readme-status-date`'s subject count has never been observed independently of
   `commit-message-policy`'s: every commit so far has touched README. The first
   commit that leaves README alone is the first run that can tell them apart.
-- One commit of fifteen carries a `Signed-off-by:`, and that is the whole real
-  subject of the sign-off rule. Its allowed branch — a sign-off naming the
-  commit's own author — is exercised by that one commit; its rejected branch —
-  a sign-off naming somebody else — by no commit at all, only by fixtures.
-  Nothing is grandfathered, and that is why: the one trailer names its author
-  and complies. This is the same shape as the bullet above, and there are now
-  two rules whose branches real subjects have never told apart.
+- The sign-off rule has three outcomes and real commits reach two of them. Most
+  commits carry no trailer at all, and every `Signed-off-by:` in history names
+  its own author, which is the allowed branch. The rejected branch — a sign-off
+  naming somebody else — is reached by no commit at all, only by fixtures.
+  Nothing is grandfathered, and that is why: the trailers that exist comply.
+  This is the same shape as the bullet above, and there are two rules whose
+  branches real subjects have never told apart.
 - The invariant is wider than the check that guards it. `collectInput` is
   checked by collecting twice under two constructed environments that differ in
   the operator's git configuration, in `HOME` and in `TZ`. An input read from

@@ -62,6 +62,11 @@ guessed from another table's, which is a different property from being
 confidential, and whatever later lets a guest send an order has to establish that
 right itself rather than infer it from possession of a code.
 
+That last requirement is superseded by ADR 0023. Nothing establishes a right:
+the route takes an order from anyone holding the code and the guest's page adds
+none of its own, which is how a paper menu on a table works. The rest of this
+paragraph stands.
+
 No sitting is stored. The row that would group one visit's orders has no reader
 until orders exist, so this slice writes nothing at runtime: table rows arrive
 the way restaurant rows do, as SQL somebody runs. The word "session" in the

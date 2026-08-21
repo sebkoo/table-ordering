@@ -1,7 +1,12 @@
 /**
  * What a guest sees after opening the code on their table.
  *
- * Read only. Nothing here takes an order.
+ * This half fetches the menu and reports what came back. What a guest does with
+ * a menu belongs to the slice that owns doing it: at a table the list is handed
+ * to the order slice, because a quantity on a row is ordering and a send that
+ * has not resolved has to freeze the rows it was chosen from -- which only one
+ * owner can do. A restaurant's menu has no table to order at and keeps its own
+ * list. Prices are formatted here either way, because money is this slice's.
  *
  * The response shape is declared here rather than shared with the API. A
  * package holding one type, for one caller, is a guess about a second caller;
@@ -10,6 +15,7 @@
  */
 
 import { type ReactElement, useEffect, useState } from 'react'
+import { Order } from '../order/order.tsx'
 
 /**
  * Which menu this is. A table's code is what a printed card carries; a
@@ -18,6 +24,8 @@ import { type ReactElement, useEffect, useState } from 'react'
 export type Source = { kind: 'restaurant'; slug: string } | { kind: 'table'; code: string }
 
 type Item = {
+  /** What an order names a line by. A name is not unique within a restaurant. */
+  id: string
   name: string
   priceMinor: number
   currency: string
@@ -124,18 +132,28 @@ export function Menu({ source }: { source: Source }): ReactElement {
     )
   }
 
+  const items = state.menu.items.map((item) => ({
+    id: item.id,
+    name: item.name,
+    price: money(item.priceMinor, item.currency),
+  }))
+
   return (
     <main data-state="ready">
       <h1>{state.menu.restaurant.name}</h1>
       {state.menu.table !== undefined && <p className="table">{state.menu.table.label}</p>}
-      <ul>
-        {state.menu.items.map((item) => (
-          <li key={item.name}>
-            <span className="name">{item.name}</span>
-            <span className="price">{money(item.priceMinor, item.currency)}</span>
-          </li>
-        ))}
-      </ul>
+      {source.kind === 'table' ? (
+        <Order code={source.code} items={items} />
+      ) : (
+        <ul>
+          {items.map((item) => (
+            <li key={item.id}>
+              <span className="name">{item.name}</span>
+              <span className="price">{item.price}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </main>
   )
 }

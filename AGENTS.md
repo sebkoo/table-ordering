@@ -84,6 +84,11 @@ that creates the thing it governs.
   Without it `psql` commits statement by statement, so a batch that fails
   partway leaves behind exactly the statements no constraint stopped, and exits
   0 having said so only on stderr.
+- A submission id names one send. A client mints it when it sends, keeps it only
+  while that send is unresolved, and retires it when the API answers. It is never
+  reused for lines it was not minted for: the write path answers a repeat with
+  the first order and writes nothing further, so a reused id is the second order
+  going missing rather than an error.
 
 ## Change size
 
