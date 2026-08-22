@@ -134,7 +134,11 @@ caller, or with none, is a guess about a variation nobody has observed.
 
 - One commit per change.
 - Subject line: lowercase, imperative, under 50 characters. No Conventional
-  Commits prefix.
+  Commits prefix. Lowercase means the whole line and not only its first
+  character, which is why an acronym is written `ci` and `http` here. Of those
+  four clauses, three are checked and mood is not: imperative is not decidable
+  by a program, so it is the one clause a reader holds
+  ([ADR 0025](docs/adr/0025-make-the-subject-clauses-executable.md)).
 - Body only where a decision needs explaining. Never describe the diff.
 - No trailers, with one exception: `Signed-off-by:` carrying the address the
   commit is authored by, and no other. Attribution trailers, session or trace

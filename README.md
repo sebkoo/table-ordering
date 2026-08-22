@@ -8,7 +8,7 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-21 · a guest sends their order from the page, and a send
+**Status:** 2026-08-22 · a guest sends their order from the page, and a send
 repeated across a reload is still one order.
 
 ## What happens at the table
@@ -482,6 +482,7 @@ each with the alternatives that were rejected and why.
 - [0022 Take a check's inputs from the repository, not from the machine](docs/adr/0022-take-a-checks-inputs-from-the-repository.md)
 - [0023 Mint a submission id per send, and keep it until the API answers](docs/adr/0023-mint-a-submission-id-per-send.md)
 - [0024 Report what each test file cost, and assert nothing about it](docs/adr/0024-report-what-each-test-file-cost.md)
+- [0025 Check the subject clauses a program can decide, and say which one it cannot](docs/adr/0025-make-the-subject-clauses-executable.md)
 
 ## Known limitations
 
@@ -597,8 +598,22 @@ each with the alternatives that were rejected and why.
   its own author, which is the allowed branch. The rejected branch — a sign-off
   naming somebody else — is reached by no commit at all, only by fixtures.
   Nothing is grandfathered, and that is why: the trailers that exist comply.
-  This is the same shape as the bullet above, and there are two rules whose
-  branches real subjects have never told apart.
+  This is the same shape as the bullet above.
+- The subject rule's rejecting branch is reached by no commit either. All
+  seventeen subjects that existed when it landed were lowercase throughout, at
+  most 48 characters, and carried no colon, so it arrived at a set that already
+  complied and every rejection it has ever made was of a fixture. That is now
+  three places where a branch is told apart by fixtures and never by a real
+  subject.
+- Of the four things `AGENTS.md` says about a subject line, three are checked
+  and one is not. Imperative mood is not decidable by a program, so nothing
+  enforces it and no run will ever go red over it. The file says which is
+  which, because a document stating four rules of which three run is worse than
+  one that says so ([ADR 0025](docs/adr/0025-make-the-subject-clauses-executable.md)).
+- The prefix clause matches the Conventional Commits grammar, whose type is
+  letters. A hyphenated pseudo-prefix — `check-push: read the log` — passes.
+  Widening the type would make it coincide with the trailer key grammar and
+  would take a case with it, which is the trade recorded in ADR 0025.
 - The invariant is wider than the check that guards it. `collectInput` is
   checked by collecting twice under two constructed environments that differ in
   the operator's git configuration, in `HOME` and in `TZ`. An input read from

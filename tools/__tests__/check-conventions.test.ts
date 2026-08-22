@@ -175,6 +175,22 @@ describe('commit-message-policy', () => {
     }
   })
 
+  it('fails when any subject in history carries a Conventional Commits prefix', () => {
+    const outcome = commitMessagePolicyRule(
+      input({ commits: authored('feat: add a thing') }),
+    ).check()
+    expect(outcome.status).toBe('fail')
+    if (outcome.status === 'fail') {
+      expect(outcome.violations).toHaveLength(1)
+      expect(outcome.violations[0]?.detail).toContain('Conventional Commits prefix "feat:"')
+    }
+  })
+
+  it('passes over the same subject with the prefix removed', () => {
+    const outcome = commitMessagePolicyRule(input({ commits: authored('add a thing') })).check()
+    expect(outcome).toEqual({ status: 'pass', subjects: 1 })
+  })
+
   it('treats an empty history array as a vacuous pass, which the runner fails', () => {
     // This is what an empty `git log` would produce if it were mapped to [].
     // It must not be mistaken for the unborn case: the repository below has

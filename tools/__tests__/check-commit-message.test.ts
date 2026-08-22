@@ -82,10 +82,19 @@ describe('check-commit-message CLI', () => {
     ['a generated-by line', 'subject line\n\nGenerated with a tool\n'],
     ['an emoji', 'subject line\n\nshipped 🚀\n'],
     ['an unapproved trailer', 'subject line\n\nRefs: PROJ-1\n'],
+    ['a Conventional Commits prefix', 'feat: add a thing\n'],
+    ['a capitalised subject', "Send the order from the guest's page\n"],
   ])('exits 1 for %s', (_label, message) => {
     const result = check(message)
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('commit rejected')
+  })
+
+  // The subject clauses reach the hook through the same predicate as the
+  // trailer rules, and nothing but this says so: a unit test of the predicate
+  // passes whether or not the hook is the caller.
+  it('exits 0 for the same subject with the prefix removed', () => {
+    expect(check('add a thing\n').status).toBe(0)
   })
 
   it('exits 2 when given no message file', () => {

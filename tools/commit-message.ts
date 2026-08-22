@@ -5,6 +5,10 @@
  * `check-commit-message.ts`, and the history check in `check-conventions.ts`.
  * Keeping one implementation is what stops the two paths from drifting apart.
  *
+ * The subject line's clauses live here too, for the same reason: the hook calls
+ * this predicate and nothing else, so a clause that is not here never reaches
+ * the commit it would have stopped.
+ *
  * Trailers are deny-by-default. The goal is that no agent ever appears as a
  * contributor, so the rule is an allow list of trailers rather than a list of
  * known agent names: a name list only rejects the agents someone thought of.
@@ -21,6 +25,35 @@ export type Violation = {
   text: string
   reason: string
 }
+
+/**
+ * The subject line's clauses, from AGENTS.md, which states four. Three are
+ * decidable by a program and are below. The fourth is imperative mood, which is
+ * not decidable in general -- a suffix test both over-fires on `send` and
+ * `bound` and under-fires on everything else -- so it stays a clause a reader
+ * holds, and AGENTS.md says which is which rather than leaving a reader to find
+ * out at a rejected commit.
+ *
+ * The bound is read from that prose, not chosen here. "Under 50 characters"
+ * admits forty-nine.
+ */
+const SUBJECT_LIMIT = 50
+
+/**
+ * The Conventional Commits prefix: a type, an optional scope, an optional `!`,
+ * then a colon and a space. The shape is matched rather than a list of type
+ * words, because the specification allows any noun as the type and a list
+ * rejects only the types somebody thought of.
+ *
+ * The type is letters alone, which is narrower than a trailer key's
+ * `[A-Za-z][A-Za-z0-9-]*` and deliberately so. Widening it to hyphens and
+ * digits would make this pattern coincide with `TRAILER_SHAPE`, and then no
+ * one-line subject could be trailer-shaped and accepted -- which is the case
+ * that establishes a message's only paragraph is not a trailer block. The cost
+ * is that a hyphenated pseudo-prefix such as `check-push: read the log` passes.
+ * It is not the specification's grammar, and this rule says what it says.
+ */
+const CONVENTIONAL_PREFIX = /^[A-Za-z]+(\([^)]*\))?!?: /
 
 /** Trailer keys a commit message may carry. Everything else is rejected. */
 const ALLOWED_TRAILER_KEYS = new Set(['Signed-off-by'])
@@ -55,6 +88,8 @@ export function commitMessageViolations(message: string, authorIdentity: string)
     violations.push({ line: index + 1, text: lines[index] ?? '', reason })
   }
 
+  for (const reason of subjectViolations(lines[0] ?? '')) add(0, reason)
+
   for (const [index, line] of lines.entries()) {
     if (SESSION_TRAILER.test(line)) {
       add(index, 'session trailer')
@@ -77,6 +112,29 @@ export function commitMessageViolations(message: string, authorIdentity: string)
   }
 
   return violations.sort((a, b) => a.line - b.line)
+}
+
+/**
+ * What the subject line violates, or nothing. One reason per clause, so that a
+ * subject breaking two says both rather than the first one looked at.
+ *
+ * Lowercase means the whole line and not merely its first character. That is
+ * the reading the seventeen subjects this rule arrived at already exhibit: they
+ * write `ci`, `os` and `http` where this repository's prose writes CI, OS and
+ * HTTP. It costs a subject its acronyms and proper nouns, which is a house
+ * style rather than an accident, and ADR 0025 records it as one.
+ */
+function subjectViolations(subject: string): string[] {
+  const reasons: string[] = []
+
+  const prefix = CONVENTIONAL_PREFIX.exec(subject)?.[0]
+  if (prefix !== undefined) reasons.push(`Conventional Commits prefix "${prefix.trimEnd()}"`)
+  if (subject !== subject.toLowerCase()) reasons.push('subject is not lowercase')
+  if (subject.length >= SUBJECT_LIMIT) {
+    reasons.push(`subject is ${subject.length} characters, the limit is under ${SUBJECT_LIMIT}`)
+  }
+
+  return reasons
 }
 
 /**

@@ -3,6 +3,17 @@ import { commitMessageViolations } from '../commit-message.ts'
 
 const IDENTITY = 'someone@example.com'
 
+/**
+ * The length bound's two sides, one character apart and identical otherwise.
+ *
+ * Only a subject of exactly fifty separates `>= 50` from `> 50` and from
+ * `>= 51`; at fifty-one all three reject it and none of them is observed. The
+ * longest subject in history is forty-eight, so history cannot supply this
+ * pair and it is constructed.
+ */
+const FIFTY = "read the guest's orders back from the row it wrote"
+const FORTY_NINE = "read the guest's order back from the row it wrote"
+
 const CLEAN = [
   'set up toolchain and ci',
   '',
@@ -22,6 +33,67 @@ describe('commitMessageViolations', () => {
 
   it('accepts a bare subject line', () => {
     expect(commitMessageViolations('set up toolchain and ci', IDENTITY)).toEqual([])
+  })
+
+  /**
+   * Each fixture below violates one clause and no other, so that what it
+   * establishes is the clause it is named for. A subject carrying a capitalised
+   * Conventional Commits type violates two and establishes neither, and the
+   * assertions are equality rather than containment to keep it that way.
+   */
+  describe('the subject line', () => {
+    describe('a Conventional Commits prefix', () => {
+      it('rejects a subject carrying one', () => {
+        expect(reasons("feat: send the order from the guest's page")).toEqual([
+          'Conventional Commits prefix "feat:"',
+        ])
+      })
+
+      it('accepts the same subject with the prefix removed', () => {
+        const message = "send the order from the guest's page"
+        expect(commitMessageViolations(message, IDENTITY)).toEqual([])
+      })
+    })
+
+    describe('lowercase', () => {
+      it('rejects a capitalised first word', () => {
+        expect(reasons("Send the order from the guest's page")).toEqual([
+          'subject is not lowercase',
+        ])
+      })
+
+      // The capital sits at the end of the value, where a rule reading only the
+      // first character does not look. Without this fixture the two readings of
+      // "lowercase" are indistinguishable: every subject in history satisfies
+      // both, and so does the fixture above.
+      it('rejects a capital that is not the first character', () => {
+        expect(reasons("send the order from the guest's Page")).toEqual([
+          'subject is not lowercase',
+        ])
+      })
+
+      it('accepts the same subject in lowercase throughout', () => {
+        const message = "send the order from the guest's page"
+        expect(commitMessageViolations(message, IDENTITY)).toEqual([])
+      })
+    })
+
+    describe('the length bound', () => {
+      // The fixture guard. A pair that drifted off fifty and forty-nine would
+      // still read as two long subjects and would observe no bound at all.
+      it('is written from both sides of exactly fifty', () => {
+        expect(FIFTY).toHaveLength(50)
+        expect(FORTY_NINE).toHaveLength(49)
+      })
+
+      it('rejects a subject of fifty characters', () => {
+        expect(reasons(FIFTY)).toEqual(['subject is 50 characters, the limit is under 50'])
+      })
+
+      it('accepts a subject of forty-nine', () => {
+        expect(commitMessageViolations(FORTY_NINE, IDENTITY)).toEqual([])
+      })
+    })
   })
 
   describe('attribution trailers', () => {
@@ -117,8 +189,23 @@ describe('commitMessageViolations', () => {
       )
     })
 
-    it('does not treat a one-line subject containing a colon as a trailer', () => {
-      expect(commitMessageViolations('fix: a thing', IDENTITY)).toEqual([])
+    /**
+     * The pair below separates two rules whose shapes overlap. Both are
+     * one-line messages whose only line is trailer-shaped, and neither is a
+     * trailer, because a message's only paragraph is not a trailer block --
+     * which is the whole of what the first one asserts, and why it has to be
+     * trailer-shaped rather than merely carrying a colon.
+     *
+     * They differ in the prefix clause alone. A Conventional Commits type is
+     * letters, so `fix:` is a prefix; a trailer key may carry a hyphen, so
+     * `check-push:` is not one.
+     */
+    it('does not treat a one-line trailer-shaped subject as a trailer', () => {
+      expect(commitMessageViolations('check-push: read the log', IDENTITY)).toEqual([])
+    })
+
+    it('rejects that shape when the key is a Conventional Commits type', () => {
+      expect(reasons('fix: a thing')).toEqual(['Conventional Commits prefix "fix:"'])
     })
 
     it('does not treat a prose final paragraph as a trailer block', () => {

@@ -85,8 +85,11 @@ export function main(argv: readonly string[]): number {
   }
   process.stderr.write(
     '\nAllowed: a subject line, a body, and a Signed-off-by trailer carrying the\n' +
-      "commit's own author address. Attribution trailers, session URLs,\n" +
-      'generated-by lines and emoji are rejected, whoever wrote them.\n',
+      "commit's own author address. The subject is lowercase throughout,\n" +
+      'imperative, under 50 characters, and carries no Conventional Commits\n' +
+      'prefix; of those four, mood is the one nothing here checks. Attribution\n' +
+      'trailers, session URLs, generated-by lines and emoji are rejected,\n' +
+      'whoever wrote them.\n',
   )
   return 1
 }

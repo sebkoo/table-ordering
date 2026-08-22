@@ -40,6 +40,11 @@ edited in the commit that first makes it meaningful.
 `commit-message-policy` ships now because of the one-way door above. Every
 other convention rule lands in the commit that creates its first subject.
 
+The subject line's own clauses were prose that nothing ran until
+[ADR 0025](0025-make-the-subject-clauses-executable.md) added them to the same
+predicate. That record carries the reading of the door above for a rule about
+history that landed seventeen commits late.
+
 The same rule governs two other things:
 
 - **Technical invariants in `AGENTS.md`.** An invariant about money lands with
