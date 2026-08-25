@@ -11,6 +11,26 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 **Status:** 2026-08-25 · a member of staff signs in on a page of their own and
 reads every open order in their restaurant, and no other restaurant's.
 
+## What it looks like
+
+The pages, and the loop between them: a guest sends a round from the table, a
+member of staff signs in, and the round is on the board. Each picture is a
+capture of the running product, and its caption names the revision it was taken
+at.
+
+![The Blue Door's menu on a guest's phone: the restaurant's name, the table's label beneath it, then each item with its price and a box for how many. Below the send button the page says the order is with the kitchen, and under that is what this table has already sent, each round with its quantity and no price beside it.](docs/images/guest-page-order-placed.png)
+
+*The guest's page, captured at `a8f828f`.*
+
+![The board's sign-in on a wider screen: a field for an email address, a field for a password whose characters the browser has replaced with dots, and a button to sign in.](docs/images/staff-sign-in.png)
+
+*The board's sign-in, captured at `a8f828f`. What was typed into the password
+field is masked by the browser, and no value from it is in the picture.*
+
+![The open-orders board on a wider screen: the heading, the name of whoever is signed in and the restaurant they work at beneath it, then a row per ticket with the table on the left and what was ordered beside it, oldest at the top.](docs/images/staff-board.png)
+
+*The board, captured at `a8f828f`.*
+
 ## What happens at the table
 
 ### Today
@@ -740,6 +760,7 @@ each with the alternatives that were rejected and why.
 - [0029 Verify a staff credential with scrypt, and carry it as a session token](docs/adr/0029-verify-a-staff-credential-and-carry-a-session.md)
 - [0030 Read the restaurant's open orders from the staff session, and name the table rather than its code](docs/adr/0030-read-the-restaurants-open-orders-from-the-staff-session.md)
 - [0031 Show the board on a page staff sign in to, and hold the token in memory alone](docs/adr/0031-show-the-board-on-a-page-staff-sign-in-to.md)
+- [0032 Show both pages in the README as dated captures, and defer the check that would hold them](docs/adr/0032-show-both-pages-as-dated-captures.md)
 
 ## Known limitations
 
@@ -790,6 +811,18 @@ each with the alternatives that were rejected and why.
   word it does not carry. The records in `docs/adr/` are outside it on purpose:
   each states what was decided on its date, and a decision that moves is
   superseded rather than rewritten.
+- The pictures at the top of this file are held by nothing executable. Each one
+  names the revision it was taken at, and no program compares a picture with the
+  page it shows, or a caption's revision with what that revision renders. The
+  check is buildable — a caption's revision resolves against history — so this is
+  a deferral rather than a limit: it lands with the first recapture, or with the
+  first image a later commit adds
+  ([ADR 0032](docs/adr/0032-show-both-pages-as-dated-captures.md)).
+- Nothing in this repository reproduces those pictures. They were taken by a
+  script that was not committed, because it would be the only thing under
+  `tools/` with no test beside it — what it emits is pixels nothing asserts on.
+  What a later capture has to match is written into ADR 0032 instead: the
+  viewport, the fixture, and the run steps it was taken from.
 - A staff session cannot be ended by anybody but its holder. Closing the tab
   discards the token, which is the whole of the close a client can perform; the
   row stays open until it expires, and there is no revocation and no renewal. A

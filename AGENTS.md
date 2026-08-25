@@ -116,6 +116,9 @@ that creates the thing it governs.
   compares the restatement with the value. `docs/adr/` is outside that: a record
   states what was decided on its date, and a decision that moves is superseded
   rather than rewritten.
+- A picture of a page in this repository's documents is a capture: taken from
+  the product this repository builds, stored here rather than fetched from
+  anywhere else, and captioned with the revision it was taken at.
 
 ## Change size
 
