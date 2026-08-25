@@ -34,9 +34,10 @@ that creates the thing it governs.
 - An order is read under the policy it is written under, on a transaction scoped
   from the row a printed code resolved to. A read that establishes no scope is
   refused, never answered with nothing.
-- A write is scoped by a policy, not by the statement. The scope is set once on
-  the transaction, from the row a printed code resolved to, and a statement that
-  runs without it is refused rather than silently widened or narrowed.
+- A write into a table under a policy is scoped by that policy, not by the
+  statement. The scope is set once on the transaction, from the row a printed
+  code resolved to, and a statement that runs without it is refused rather than
+  silently widened or narrowed.
 - The application connects as a role the policy applies to: not the owner of the
   tables and not a superuser, both of which PostgreSQL exempts, and a superuser
   even from `FORCE`. Every check that asserts a policy connects the way the
@@ -44,9 +45,18 @@ that creates the thing it governs.
 - A row naming two of a restaurant's rows names them through one composite
   foreign key, so a child cannot point at a parent in another restaurant while
   every single-column key is satisfied.
-- One query resolves a printed code to the restaurant that owns it, and it is
-  the only one with no restaurant to scope by. Every query after it is scoped by
+- One query per request resolves what the caller holds -- a printed code, a
+  staff credential -- to the restaurant that owns it, and it is the only one in
+  that request with no restaurant to scope by. Every query after it is scoped by
   the restaurant it returned, never by anything the caller sent.
+- A table a credential is resolved through carries no policy, because a policy
+  would have to be satisfied before the scope it defines could be known. Its
+  rows are tied to their restaurant by a composite foreign key instead, and what
+  is written into them comes from the row the resolve returned.
+- A secret this repository is given is stored as something derived from it and
+  never as itself: a password as a key derivation record carrying the parameters
+  it was made with, a session token as a digest. It is compared in constant
+  time, and it travels in a header rather than in a path or a query string.
 - A table is identified by the code printed on it. The code is unique across
   restaurants, is not derived from the table's label, and is not a secret: it is
   printed in public view, so holding it authorises nothing.

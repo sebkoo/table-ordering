@@ -166,3 +166,8 @@ the constant it restates — so a window moved here leaves that page saying
 something untrue, and the page names this file rather than the other way round.
 And the page does not poll, because the bound above is on what one photograph of
 a placard reaches, not on how often it is asked for.
+
+The staff identity this record deferred lands in
+[ADR 0029](0029-verify-a-staff-credential-and-carry-a-session.md). The board it
+was deferred for is still not built: what 0029 adds is a request that can be
+told from a guest's, and the read that uses it is the change after.

@@ -13,6 +13,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { Pool } from 'pg'
 import { menuRoutes } from './features/menu/routes.ts'
 import { orderRoutes } from './features/order/routes.ts'
+import { staffRoutes } from './features/staff/routes.ts'
 
 /**
  * The application role, not the one that owns the tables.
@@ -32,6 +33,7 @@ export function buildApp(pool: Pool): FastifyInstance {
   const app = Fastify()
   app.register(menuRoutes(pool))
   app.register(orderRoutes(pool))
+  app.register(staffRoutes(pool))
   return app
 }
 

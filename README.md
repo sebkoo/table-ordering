@@ -8,8 +8,8 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-25 · a guest's page shows what has been sent from their
-table, read back from the code printed on it.
+**Status:** 2026-08-25 · a member of staff can sign in, and the session they
+get back names the restaurant they work for.
 
 ## What happens at the table
 
@@ -189,12 +189,48 @@ and a code the address cannot hold at all, both send the guest to a member of
 staff — asking again will not help either one. A menu that cannot be fetched
 says to try again instead.
 
+**Staff sign in for themselves.** A restaurant mints a credential for each
+member of staff, and signing in answers who they are and where they work:
+
+```
+POST /staff/sessions
+
+{ "email": "ada@blue-door.example", "password": "the one the mint printed" }
+```
+
+```json
+{
+  "token": "…",
+  "staff": { "name": "Ada" },
+  "restaurant": { "slug": "blue-door", "name": "The Blue Door" }
+}
+```
+
+The token is what the next request carries, in an `authorization: Bearer`
+header, and `GET /staff/sessions/current` answers the same identity for it. It
+is never in a path or a query string, because those are written into every proxy
+log between the client and here.
+
+Nothing in either request names a restaurant, and nothing may. Which restaurant
+a staff request reaches follows from the row the credential resolved to, so a
+credential minted for one restaurant cannot be pointed at another — the same
+construction that makes a printed code safe, applied to a person
+([ADR 0029](docs/adr/0029-verify-a-staff-credential-and-carry-a-session.md)).
+
+A wrong password and an address no staff member uses get the same answer, and
+take the same work to produce: an API that told them apart would answer "does
+this person work here" for anybody who asked. The password itself is stored
+nowhere. What the row holds is a key derived from it with `scrypt`, carrying the
+parameters it was derived under so they can be raised later without invalidating
+anybody's row.
+
+Staff cannot see an order yet. That is the next change.
+
 ### Next
 
 1. Staff will be able to see what every table has ordered, and what is still
-   open. Both wait on something this repository does not have: a way to tell a
-   staff request from a guest one. Nothing distinguishes them today, so a board
-   on the addresses that exist would be a public list of every order in the
+   open. A staff request can now be told from a guest's, so what is left is the
+   read itself: no address yet answers a staff request with the orders in their
    restaurant.
 2. The menu read will move under the policy too, so that a menu query stops
    carrying its own scope.
@@ -299,6 +335,7 @@ it is started.
 | The guest's page sends the order | Done |
 | A table's own orders, read back under the policy | Done |
 | The guest's page shows what the table has sent | Done |
+| A member of staff can prove who they are | Done |
 | Row-level security on a read, so a menu query drops its scope too | Planned |
 | Kitchen board | Planned |
 | Payment, as an option rather than a requirement | Planned |
@@ -407,6 +444,47 @@ curl -s localhost:3000/tables/9f3c1a7b20de/orders
 ```
 
 Anything placed more than two hours ago is not in that list.
+
+Give that restaurant a member of staff. There is no admin route for this either,
+and the password is minted rather than chosen, for the reason the table's code
+was. The mint prints the credential to be stored on standard output and the
+password on standard error, so the password appears on your terminal and reaches
+no pipe and no shell history — it is stored nowhere and cannot be recovered from
+what is:
+
+```sh
+credential=$(node --disable-warning=ExperimentalWarning \
+  services/api/src/features/staff/credential.ts)
+```
+
+```sh
+docker compose exec -T postgres \
+  psql -U table_ordering -d table_ordering --single-transaction <<SQL
+insert into staff (restaurant_id, email, name, credential)
+select id, 'ada@blue-door.example', 'Ada', '$credential' from restaurant where slug = 'blue-door';
+SQL
+```
+
+Then sign in as them, pasting in the password it printed:
+
+```sh
+curl -s -X POST localhost:3000/staff/sessions \
+  -H 'content-type: application/json' \
+  -d '{"email":"ada@blue-door.example","password":"THE PRINTED PASSWORD"}'
+```
+
+```json
+{"token":"...","staff":{"name":"Ada"},"restaurant":{"slug":"blue-door","name":"The Blue Door"}}
+```
+
+Take the token out of that and ask who is holding it:
+
+```sh
+curl -s localhost:3000/staff/sessions/current -H 'authorization: Bearer THE TOKEN'
+```
+
+A password that is not that one, and an address no staff member uses, both
+answer `401` with the same body.
 
 The page a guest opens is a second process in development:
 
@@ -564,6 +642,7 @@ each with the alternatives that were rejected and why.
 - [0026 Read a table's open orders by its printed code, and defer the board to a staff identity](docs/adr/0026-read-a-tables-open-orders-by-its-printed-code.md)
 - [0027 Show the table's orders on the guest's page, refreshed only by a send](docs/adr/0027-show-the-tables-orders-on-the-guests-page.md)
 - [0028 Check the window where it is restated, and leave the records alone](docs/adr/0028-check-the-window-where-it-is-restated.md)
+- [0029 Verify a staff credential with scrypt, and carry it as a session token](docs/adr/0029-verify-a-staff-credential-and-carry-a-session.md)
 
 ## Known limitations
 
@@ -614,6 +693,29 @@ each with the alternatives that were rejected and why.
   word it does not carry. The records in `docs/adr/` are outside it on purpose:
   each states what was decided on its date, and a decision that moves is
   superseded rather than rewritten.
+- A staff session cannot be closed. It expires, and until then a token that has
+  leaked is a token that works: there is no sign-out, no revocation and no
+  renewal, because the client that would ask for one does not exist yet.
+- A password nobody wrote down is a staff member who needs a new row. The mint
+  prints it once and stores only a value derived from it, and there is no reset
+  and no way to change one.
+- `staff` and `staff_session` carry no policy, and cannot: a policy on the table
+  a credential is resolved through would have to be satisfied before the scope
+  it defines could be known. What ties a session to one restaurant is a
+  composite foreign key instead, and the application role can read every staff
+  row in every restaurant — which is what resolving a credential that names no
+  restaurant means.
+- Nothing yet answers a staff request with an order, so the claim that a staff
+  credential reaches only its own restaurant's rows is pinned at the identity —
+  a credential minted for one restaurant answers that one and never the other —
+  and not yet at the order rows. The read that pins it is the next change.
+- Signing in costs a memory-hard derivation, deliberately, so it spends about a
+  third of a second of CPU and a few hundred megabytes. Nothing rate-limits it,
+  because nothing is deployed.
+- The mint's own half of `credential.ts` is reached by no test, the same
+  boundary `check-push`'s CLI half sits behind. What it produces is checked
+  through the function it calls; that it prints the record on one stream and the
+  password on the other is not.
 - Row-level security covers an order and its lines, written and read.
   `restaurant`, `restaurant_table` and `menu_item` carry no policy, so on a read
   of those the scope is still the query's job, exactly as it was.
