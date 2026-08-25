@@ -219,3 +219,14 @@ rather than anything presentable.
 **A session cannot be closed.** It expires, and until then a token that has
 leaked is a token that works. The client that can ask for a sign-out is the
 thing that ends this.
+
+The read this record was the prerequisite for is
+[ADR 0030](0030-read-the-restaurants-open-orders-from-the-staff-session.md),
+which consumes the resolve and closes the row named above: a staff scope reaching
+only its own restaurant's order rows is pinned there, across four seeded
+restaurants, and the mechanism it pins is the policies rather than the composite
+key argued over here. That record also reports what the key could not be shown to
+do: with the key dropped and a straddling session seeded anyway, the resolve's
+two-column join refuses the token before the key would have been consulted. The
+board's page is still the change after, so the second half of the gap above is
+still open.

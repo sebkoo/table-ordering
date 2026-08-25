@@ -32,8 +32,9 @@ that creates the thing it governs.
   `restaurant`, `restaurant_table` and `menu_item` carry no policy, so on a read
   of those the scope is the query's job.
 - An order is read under the policy it is written under, on a transaction scoped
-  from the row a printed code resolved to. A read that establishes no scope is
-  refused, never answered with nothing.
+  from the row this request's one resolve returned -- a printed code's table, a
+  staff credential's session. A read that establishes no scope is refused, never
+  answered with nothing.
 - A write into a table under a policy is scoped by that policy, not by the
   statement. The scope is set once on the transaction, from the row a printed
   code resolved to, and a statement that runs without it is refused rather than

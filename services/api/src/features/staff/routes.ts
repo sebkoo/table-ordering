@@ -1,9 +1,16 @@
 /**
- * The two ways a member of staff is recognised.
+ * What a member of staff is recognised by, and the first thing that recognition
+ * reaches.
  *
  * `POST /staff/sessions` takes an email and a password and answers who they
  * belong to, with the token every later request carries.
  * `GET /staff/sessions/current` answers the same identity for a token.
+ * `GET /staff/orders` answers the open orders in that token's restaurant.
+ *
+ * The third address is here rather than in a slice of its own because this
+ * router is grouped by the boundary it sits behind: everything in this file
+ * begins by resolving a credential, and nothing outside it needs `bearer` or the
+ * body a closed session is refused with. ADR 0030.
  *
  * Neither request names a restaurant, and neither may. The restaurant a staff
  * request reaches is the one on the row the credential resolved to, so there is
@@ -22,8 +29,11 @@
 
 import type { FastifyInstance } from 'fastify'
 import type { Pool } from 'pg'
+import { OPEN_WINDOW, SET_SCOPE } from '../order/sql.ts'
 import { digestToken, mintToken, verifyNobody, verifyPassword } from './credential.ts'
 import {
+  type BoardRow,
+  OPEN_ORDERS_IN_RESTAURANT,
   OPEN_SESSION,
   SESSION_FOR_DIGEST,
   SESSION_LIFETIME,
@@ -84,6 +94,54 @@ const CURRENT_SCHEMA = {
   },
 }
 
+/**
+ * What the board is told, and the whole of it.
+ *
+ * The table's label, because it is the one thing the caller did not hold: a
+ * guest reaches their own table's orders by holding that table's code, and a
+ * member of staff holds none. Never the code itself -- it authorises an order at
+ * that table, and the board has no reader for it, so it does not travel here.
+ *
+ * No price, because an order records none. No time either: `placed_at`'s only
+ * reader is the sort the query has already applied, which is the reason the
+ * guest's read leaves it out too. The first board view that shows how long a
+ * ticket has waited is what adds it. ADR 0030.
+ */
+const BOARD_SCHEMA = {
+  response: {
+    200: {
+      type: 'object',
+      required: ['orders'],
+      properties: {
+        orders: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['id', 'table', 'lines'],
+            properties: {
+              id: { type: 'string' },
+              table: {
+                type: 'object',
+                required: ['label'],
+                properties: { label: { type: 'string' } },
+              },
+              lines: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  required: ['name', 'quantity'],
+                  properties: { name: { type: 'string' }, quantity: { type: 'integer' } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    401: ERROR,
+  },
+}
+
 const REFUSED = 'that email and password do not match'
 const CLOSED = 'that session is not open'
 
@@ -99,6 +157,75 @@ function identity(row: StaffRow | SessionRow) {
   return {
     staff: { name: row.staff_name },
     restaurant: { slug: row.restaurant_slug, name: row.restaurant_name },
+  }
+}
+
+type BoardOrder = {
+  id: string
+  table: { label: string }
+  lines: { name: string; quantity: number }[]
+}
+
+/**
+ * Rows into orders, in the sequence the query returned them.
+ *
+ * A row whose line columns are null is the left join reporting an order with
+ * nothing on it, which is an order with an empty list rather than an order to
+ * drop -- the same reading the guest's read gives, for the same reason.
+ */
+function group(rows: readonly BoardRow[]): BoardOrder[] {
+  const orders = new Map<string, BoardOrder>()
+
+  for (const row of rows) {
+    let open = orders.get(row.order_id)
+    if (open === undefined) {
+      open = { id: row.order_id, table: { label: row.table_label }, lines: [] }
+      orders.set(row.order_id, open)
+    }
+    if (row.item_name === null || row.quantity === null) continue
+    open.lines.push({ name: row.item_name, quantity: row.quantity })
+  }
+
+  return [...orders.values()]
+}
+
+/**
+ * One transaction, in the shape the guest's read already has: resolve what the
+ * caller holds, set the scope from the row it returned, then read.
+ *
+ * The resolve is this request's only statement with no restaurant to scope by.
+ * Nothing after it names a restaurant at all -- the policies on `table_order`
+ * and `table_order_line` are what scope the read, against a value that came from
+ * a row rather than from anything the caller sent, and there is no field in the
+ * request for a caller to put one in.
+ *
+ * null is a session that does not resolve, and the route refuses it. A board
+ * that answered an empty list instead would tell a kitchen that nothing is open
+ * when what it actually knows is nothing at all.
+ */
+async function openOrders(pool: Pool, digest: Buffer): Promise<BoardOrder[] | null> {
+  const client = await pool.connect()
+
+  try {
+    await client.query('begin')
+
+    const { rows } = await client.query<SessionRow>(SESSION_FOR_DIGEST, [digest])
+    const session = rows[0]
+    if (session === undefined) {
+      await client.query('rollback')
+      return null
+    }
+
+    await client.query(SET_SCOPE, [session.restaurant_id])
+    const open = await client.query<BoardRow>(OPEN_ORDERS_IN_RESTAURANT, [OPEN_WINDOW])
+
+    await client.query('commit')
+    return group(open.rows)
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
   }
 }
 
@@ -149,6 +276,16 @@ export function staffRoutes(pool: Pool) {
       if (open === undefined) return reply.code(401).send({ error: CLOSED })
 
       return identity(open)
+    })
+
+    app.get('/staff/orders', { schema: BOARD_SCHEMA }, async (request, reply) => {
+      const token = bearer(request.headers.authorization)
+      if (token === null) return reply.code(401).send({ error: CLOSED })
+
+      const orders = await openOrders(pool, digestToken(token))
+      if (orders === null) return reply.code(401).send({ error: CLOSED })
+
+      return { orders }
     })
   }
 }

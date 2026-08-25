@@ -8,8 +8,8 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-25 · a member of staff can sign in, and the session they
-get back names the restaurant they work for.
+**Status:** 2026-08-25 · a member of staff can read every open order in their
+own restaurant, and no other restaurant's.
 
 ## What happens at the table
 
@@ -224,14 +224,44 @@ nowhere. What the row holds is a key derived from it with `scrypt`, carrying the
 parameters it was derived under so they can be raised later without invalidating
 anybody's row.
 
-Staff cannot see an order yet. That is the next change.
+**And they see what their restaurant has ordered.** That token is the whole of
+what the board asks with:
+
+```
+GET /staff/orders
+authorization: Bearer …
+```
+
+```json
+{
+  "orders": [
+    { "id": "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
+      "table": { "label": "Table 7" },
+      "lines": [{ "name": "Flat white", "quantity": 2 }] }
+  ]
+}
+```
+
+Every open order in that restaurant, oldest first, each naming the table it was
+placed at. Which restaurant is not in the request and cannot be: it is the one on
+the row the session resolved to, and every statement after that resolve is scoped
+by the policy rather than by the query
+([ADR 0030](docs/adr/0030-read-the-restaurants-open-orders-from-the-staff-session.md)).
+
+It carries the table's label and never the table's code. The code is what a guest
+orders with; the board has no reader for it, and a value that authorises a write
+does not travel where nothing reads it.
+
+Open here means what it means to a guest: recent, not unserved. Nothing records
+that an order has been made, and nothing can until staff can act on one rather
+than only look at it.
+
+The board has no page yet. That is the next change.
 
 ### Next
 
-1. Staff will be able to see what every table has ordered, and what is still
-   open. A staff request can now be told from a guest's, so what is left is the
-   read itself: no address yet answers a staff request with the orders in their
-   restaurant.
+1. The board will become a page rather than an address, so staff read it on a
+   screen in the kitchen instead of with `curl`.
 2. The menu read will move under the policy too, so that a menu query stops
    carrying its own scope.
 3. The list on the guest's page will keep itself current, so a round sent from
@@ -336,6 +366,7 @@ it is started.
 | A table's own orders, read back under the policy | Done |
 | The guest's page shows what the table has sent | Done |
 | A member of staff can prove who they are | Done |
+| The restaurant's open orders, read under a staff session | Done |
 | Row-level security on a read, so a menu query drops its scope too | Planned |
 | Kitchen board | Planned |
 | Payment, as an option rather than a requirement | Planned |
@@ -485,6 +516,17 @@ curl -s localhost:3000/staff/sessions/current -H 'authorization: Bearer THE TOKE
 
 A password that is not that one, and an address no staff member uses, both
 answer `401` with the same body.
+
+The same token reads the board, which is every open order in Ada's restaurant and
+no other restaurant's:
+
+```sh
+curl -s localhost:3000/staff/orders -H 'authorization: Bearer THE TOKEN'
+```
+
+```json
+{"orders":[{"id":"1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed","table":{"label":"Table 7"},"lines":[{"name":"Flat white","quantity":2}]}]}
+```
 
 The page a guest opens is a second process in development:
 
@@ -643,6 +685,7 @@ each with the alternatives that were rejected and why.
 - [0027 Show the table's orders on the guest's page, refreshed only by a send](docs/adr/0027-show-the-tables-orders-on-the-guests-page.md)
 - [0028 Check the window where it is restated, and leave the records alone](docs/adr/0028-check-the-window-where-it-is-restated.md)
 - [0029 Verify a staff credential with scrypt, and carry it as a session token](docs/adr/0029-verify-a-staff-credential-and-carry-a-session.md)
+- [0030 Read the restaurant's open orders from the staff session, and name the table rather than its code](docs/adr/0030-read-the-restaurants-open-orders-from-the-staff-session.md)
 
 ## Known limitations
 
@@ -705,10 +748,27 @@ each with the alternatives that were rejected and why.
   composite foreign key instead, and the application role can read every staff
   row in every restaurant — which is what resolving a credential that names no
   restaurant means.
-- Nothing yet answers a staff request with an order, so the claim that a staff
-  credential reaches only its own restaurant's rows is pinned at the identity —
-  a credential minted for one restaurant answers that one and never the other —
-  and not yet at the order rows. The read that pins it is the next change.
+- A staff credential reaching only its own restaurant's order rows is pinned at
+  the order rows now, across four seeded restaurants, and not at the identity
+  alone. What that comparison exercises is the policies rather than the composite
+  key beside them: a session whose restaurant is not its staff member's is
+  refused by the key, and would be refused by the resolve's two-column join even
+  with the key gone. Both were run rather than reasoned about.
+- The board is an address with no page. Staff reach it with a token and `curl`
+  until the page lands, which is the next change.
+- The board shows no time. The answer carries no `placed_at`, so a page can say
+  what order the tickets arrived in and not how long any of them has waited. The
+  field lands with the first view that shows the waiting.
+- One constant bounds two different disclosures. The guest's read is bounded
+  because a printed code is public and cannot be revoked; the board's is bounded
+  because a kitchen wants what is outstanding rather than a history. They are one
+  value today, and they separate the first time an order can be marked served.
+- Nothing tells a statement that re-scopes itself from one that leaves the job to
+  the policy. A predicate comparing `restaurant_id` with the transaction's scope
+  would agree with the policy in every state, including the unscoped one where
+  both raise, so no condition here can see the difference. The same holds for the
+  second column on the board's join to `restaurant_table`, which the order's own
+  composite key already guarantees.
 - Signing in costs a memory-hard derivation, deliberately, so it spends about a
   third of a second of CPU and a few hundred megabytes. Nothing rate-limits it,
   because nothing is deployed.

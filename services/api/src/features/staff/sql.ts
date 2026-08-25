@@ -80,9 +80,18 @@ export const OPEN_SESSION = `
  * key already makes a straddling row unrepresentable; naming both columns here
  * means this query would return nothing rather than the wrong name if one ever
  * existed.
+ *
+ * `restaurant_id` is selected as well as joined on, because this is the request's
+ * one query with no restaurant to scope by and the board is what scopes itself
+ * from what it returns. It is taken from `staff` rather than from
+ * `staff_session`: the join makes the two equal, and every value this query
+ * answers with then comes from the staff row and the restaurant it belongs to.
+ * `GET /staff/sessions/current` does not read it, and `CURRENT_SCHEMA` does not
+ * name it, so it reaches no client.
  */
 export const SESSION_FOR_DIGEST = `
-  select staff.name as staff_name,
+  select staff.restaurant_id,
+         staff.name as staff_name,
          restaurant.slug as restaurant_slug,
          restaurant.name as restaurant_name
   from staff_session
@@ -95,7 +104,63 @@ export const SESSION_FOR_DIGEST = `
 `
 
 export type SessionRow = {
+  restaurant_id: string
   staff_name: string
   restaurant_slug: string
   restaurant_name: string
+}
+
+/**
+ * Every open order in the restaurant on the transaction's scope, with the table
+ * each was placed at and the lines on it.
+ *
+ * Nothing here names a restaurant, and that is the whole of the evidence this
+ * statement carries. `table_order` and `table_order_line` hold `for all`
+ * policies whose `using` clause is `app.restaurant_id`, set from the row
+ * {@link SESSION_FOR_DIGEST} returned, so a predicate here would be the
+ * statement taking back the job the policy now has -- and on a connection that
+ * has never carried the setting the read is refused rather than answered with
+ * nothing.
+ *
+ * The window is the guest read's `OPEN_WINDOW`, imported rather than restated.
+ * A second constant for the same idea is the drift ADR 0028 exists to prevent.
+ * "Open" means recent, here as there: no column records that an order has been
+ * served, and nothing can write one until staff can act rather than only look.
+ *
+ * `restaurant_table` carries no policy, so its join scopes itself -- against
+ * `o.restaurant_id`, which the policy has already filtered, and never against
+ * anything the caller sent. It is an inner join and cannot drop an order:
+ * `table_id` is `not null` and its composite foreign key guarantees the row. The
+ * two joins below it are LEFT for the reason `MENU_FOR_RESTAURANT` gives, so an
+ * order with nothing on it arrives as one row with null line columns rather than
+ * vanishing.
+ *
+ * The sort is `OPEN_ORDERS_AT_TABLE`'s four terms unchanged, so the board reads
+ * oldest first, which is the order a kitchen works.
+ */
+export const OPEN_ORDERS_IN_RESTAURANT = `
+  select
+    o.id as order_id,
+    t.label as table_label,
+    line.quantity,
+    item.name as item_name
+  from table_order o
+  join restaurant_table t
+    on t.id = o.table_id
+   and t.restaurant_id = o.restaurant_id
+  left join table_order_line line
+    on line.order_id = o.id
+  left join menu_item item
+    on item.id = line.menu_item_id
+   and item.restaurant_id = line.restaurant_id
+  where o.placed_at > now() - $1::interval
+  order by o.placed_at, o.id, item.sort_order, item.name
+`
+
+/** One row of {@link OPEN_ORDERS_IN_RESTAURANT}. The line columns are null for an order with no lines. */
+export type BoardRow = {
+  order_id: string
+  table_label: string
+  quantity: number | null
+  item_name: string | null
 }
