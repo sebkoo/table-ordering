@@ -15,6 +15,13 @@
  * order id, and every condition below except C2 still green. So C2 compares two
  * orders' line sets against one, as values.
  *
+ * The file carries a second subject, and it is the read the page makes of the
+ * same address. What can be wrong there while looking right is silence: a page
+ * that showed nothing when it could not read would tell a guest their round is
+ * not with the kitchen, and send them to order it again. So the conditions below
+ * separate three answers that all render as no rows -- a table with nothing at
+ * it, a read that was refused, and a read that never completed.
+ *
  * Each condition orders at its own seeded table, so every count it reads is its
  * own and a condition deleted from the middle of this file changes nothing about
  * its neighbours.
@@ -37,6 +44,7 @@ import { Pool } from 'pg'
 import { type Browser, type BrowserContext, chromium, type Page } from 'playwright'
 import { build, type PreviewServer, preview } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { NOTHING_IN_WINDOW } from './placed.tsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(here, '..', '..', '..', '..', '..')
@@ -82,8 +90,29 @@ const OFFLINE = tableCode('c')
 const LOST_ANSWER = tableCode('d')
 const REFUSED = tableCode('e')
 const NO_RANDOM_UUID = tableCode('f')
+const READS_BACK = tableCode('g')
+const NOTHING_SENT = tableCode('h')
+const TWO_ROUNDS = tableCode('i')
+const NO_PRICES = tableCode('j')
+const ANOTHER_PHONE = tableCode('k')
+const NO_ANSWER = tableCode('l')
+const REMOVED = tableCode('m')
 
-const TABLES = [SENDS, SECOND_ROUND, OFFLINE, LOST_ANSWER, REFUSED, NO_RANDOM_UUID]
+const TABLES = [
+  SENDS,
+  SECOND_ROUND,
+  OFFLINE,
+  LOST_ANSWER,
+  REFUSED,
+  NO_RANDOM_UUID,
+  READS_BACK,
+  NOTHING_SENT,
+  TWO_ROUNDS,
+  NO_PRICES,
+  ANOTHER_PHONE,
+  NO_ANSWER,
+  REMOVED,
+]
 
 /**
  * The item names carry this run's schema, for the reason `menu.browser.test.ts`
@@ -273,10 +302,16 @@ async function choose(page: Page, name: string, quantity: number): Promise<void>
  */
 async function send(page: Page, code: string): Promise<void> {
   const path = `/tables/${code}/orders`
+  // The method is part of the predicate. `GET` and `POST` share this address, so
+  // a predicate naming only the path matches the read the page makes on mount
+  // and the one it makes after a send lands as readily as the send itself.
   const concluded = Promise.race([
-    page.waitForResponse((response) => response.url().endsWith(path), { timeout: SETTLE_MS }),
+    page.waitForResponse(
+      (response) => response.url().endsWith(path) && response.request().method() === 'POST',
+      { timeout: SETTLE_MS },
+    ),
     page.waitForEvent('requestfailed', {
-      predicate: (request) => request.url().endsWith(path),
+      predicate: (request) => request.url().endsWith(path) && request.method() === 'POST',
       timeout: SETTLE_MS,
     }),
   ]).catch(() => undefined)
@@ -289,6 +324,127 @@ async function send(page: Page, code: string): Promise<void> {
 /** Read and compare. Never a wait for the value the condition expects. */
 function state(page: Page): Promise<string | null> {
   return page.locator('[data-order]').getAttribute('data-order')
+}
+
+/**
+ * An order at a table, written through the role that owns the tables.
+ *
+ * Outside the policy and outside the browser, which is the point: what a
+ * condition seeded this way is the *table's* order rather than this tab's, and a
+ * page that showed only what it had sent itself would fail on it.
+ */
+async function seedOrder(code: string, lines: { id: string; quantity: number }[]): Promise<void> {
+  const { rows } = await owner.query<{ id: string }>(
+    `insert into table_order (restaurant_id, table_id, submission_id)
+     select restaurant_id, id, gen_random_uuid() from restaurant_table where code = $1
+     returning id`,
+    [code],
+  )
+  const order = rows[0]
+  if (order === undefined) throw new Error(`no table is seeded at ${code}`)
+
+  for (const line of lines) {
+    await owner.query(
+      `insert into table_order_line (order_id, restaurant_id, menu_item_id, quantity)
+       select $1, restaurant_id, $2, $3 from restaurant_table where code = $4`,
+      [order.id, line.id, line.quantity, code],
+    )
+  }
+}
+
+/**
+ * Wait until the page is done reading this table's orders -- not until it
+ * reaches the state a condition expects.
+ *
+ * The network half of {@link send}'s pair, narrowed to the read: a response or a
+ * failed request, whichever the read produces. A page that issues no read at all
+ * runs this out and is then read as whatever it is stuck in.
+ */
+function reading(page: Page, code: string): Promise<unknown> {
+  const path = `/tables/${code}/orders`
+  return Promise.race([
+    page.waitForResponse(
+      (response) => response.url().endsWith(path) && response.request().method() === 'GET',
+      { timeout: SETTLE_MS },
+    ),
+    page.waitForEvent('requestfailed', {
+      predicate: (request) => request.url().endsWith(path) && request.method() === 'GET',
+      timeout: SETTLE_MS,
+    }),
+  ]).catch(() => undefined)
+}
+
+/**
+ * Two turns of the page's own task queue, which is where the render that follows
+ * an answer happens.
+ *
+ * The settle on the load path, and deliberately a wait on the platform rather
+ * than on the DOM: the condition that has to survive a page rendering *nothing*
+ * is on this path, and it could not take a wait for an element. It is enough
+ * here because `goto` has already waited for the network to go quiet, so the
+ * answer's body has arrived by the time this runs.
+ */
+function flushed(page: Page): Promise<void> {
+  return page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        setTimeout(() => setTimeout(() => resolve(), 0), 0)
+      }),
+  )
+}
+
+/** Open a table's page and wait until its read of that table's orders has settled. */
+async function openAndRead(code: string): Promise<Page> {
+  const page = await context.newPage()
+  const read = reading(page, code)
+  await page.goto(`${origin}/t/${code}`, { waitUntil: 'networkidle' })
+  await page.locator('main:not([data-state="loading"])').waitFor()
+  await read
+  await flushed(page)
+  return page
+}
+
+/**
+ * Send, then wait until the read that follows a send has settled.
+ *
+ * The settle here is the region leaving `loading`, not two turns of the task
+ * queue, and the difference from the load path is that nothing has waited for
+ * the network to go quiet: `waitForResponse` resolves on an answer's headers,
+ * and the body, the parse and the render all follow it.
+ *
+ * It is a wait on settledness and not on an outcome -- `loading` is the one
+ * state that is not an answer, and the three that are all satisfy it. It is the
+ * same shape as `[data-order][data-busy="false"]` above, and it is available
+ * here for the same reason: a page that has just sent has a region to look at.
+ */
+async function sendAndRead(page: Page, code: string): Promise<void> {
+  const read = reading(page, code)
+  await send(page, code)
+  await read
+  await page.locator('[data-placed]:not([data-placed="loading"])').waitFor()
+}
+
+/**
+ * The region's state, or null when there is no region.
+ *
+ * The count comes first so that a page rendering nothing is a value another
+ * value can differ from. `getAttribute` on a locator matching nothing reports a
+ * timeout, and a timeout is what a dead server produces too.
+ */
+async function placedState(page: Page): Promise<string | null> {
+  const region = page.locator('[data-placed]')
+  return (await region.count()) === 0 ? null : region.getAttribute('data-placed')
+}
+
+/** As {@link placedState}: null is the absence of the element, never a wait for it. */
+async function placedText(page: Page, selector: string): Promise<string | null> {
+  const at = page.locator(selector)
+  return (await at.count()) === 0 ? null : at.textContent()
+}
+
+/** One entry per order, in the sequence the route returned them. */
+function placedLines(page: Page): Promise<string[]> {
+  return page.locator('[data-placed] .line').allTextContents()
 }
 
 describe('the order a guest sends from their table', () => {
@@ -391,15 +547,19 @@ describe('the order a guest sends from their table', () => {
     await page.close()
   })
 
-  it('offers no way to order on a page with no table', async () => {
+  it('offers no way to order, and nothing to read back, on a page with no table', async () => {
     const page = await context.newPage()
     await page.goto(`${origin}/r/${SLUG}`, { waitUntil: 'networkidle' })
     await page.locator('main:not([data-state="loading"])').waitFor()
 
-    // Two counts, because either alone passes for the wrong reason: a page that
-    // rendered nothing at all has no order control either.
-    expect(await page.locator('[data-order]').count()).toBe(0)
-    expect(await page.locator('li .name').count()).toBe(ITEMS.length)
+    // Three counts, because any one alone passes for the wrong reason: a page
+    // that rendered nothing at all carries no order control and no list either.
+    // The list asks about a table, and this address names none.
+    expect([
+      await page.locator('[data-order]').count(),
+      await page.locator('[data-placed]').count(),
+      await page.locator('li .name').count(),
+    ]).toEqual([0, 0, ITEMS.length])
     await page.close()
   })
 
@@ -472,6 +632,161 @@ describe('the order a guest sends from their table', () => {
 
     expect(await state(page)).toBe('sent')
     expect(await ordersAt(NO_RANDOM_UUID)).toEqual([[`1 × ${FLAT_WHITE}`]])
+    await page.close()
+  })
+})
+
+/**
+ * What the table has already sent, read back on the guest's own page.
+ *
+ * The conditions here separate three answers that all render as no rows, because
+ * the page cannot say "nothing" without saying which one it means: a table with
+ * nothing at it, a read the API refused, and a read that never completed. Only
+ * the first of those is a fact about the table, and the other two are the ones
+ * that would send a guest to order a round they have already sent.
+ *
+ * Where an order is seeded through `owner` rather than sent through the page, it
+ * is the table's order and not this tab's -- which is what a guest actually
+ * asks about, and what separates a list from a memory of what this browser did.
+ */
+describe('the orders a guest reads back on their page', () => {
+  it('shows a send in the list without a reload', async () => {
+    const page = await openAndRead(READS_BACK)
+
+    await choose(page, FLAT_WHITE, 2)
+    await sendAndRead(page, READS_BACK)
+
+    expect([await placedState(page), await placedLines(page)]).toEqual([
+      'ready',
+      [`2 × ${FLAT_WHITE}`],
+    ])
+    await page.close()
+  })
+
+  /**
+   * The empty state, as its own artefact.
+   *
+   * A condition asserting that no rows are shown passes identically when the
+   * component crashed, was never mounted, or never asked. The count, the
+   * attribute and the sentence are three values, and the count is first so that
+   * a page rendering nothing reads as a value rather than as a timeout.
+   *
+   * The sentence is imported rather than restated. It carries a value the server
+   * owns -- `OPEN_WINDOW` in `services/api/src/features/order/sql.ts`, which this
+   * workspace cannot import -- and restating it here would put a third copy of
+   * that value in the tree with nothing holding any two of them together.
+   */
+  it('renders the empty state as its own artefact, not as an absence', async () => {
+    const page = await openAndRead(NOTHING_SENT)
+
+    expect([
+      await page.locator('[data-placed]').count(),
+      await placedState(page),
+      await placedText(page, '[data-placed] .none'),
+    ]).toEqual([1, 'empty', NOTHING_IN_WINDOW])
+    await page.close()
+  })
+
+  // The sequence is the server's: `order by o.placed_at` and a route that keeps
+  // the rows in the order they arrived. The pair is chosen so a client-side sort
+  // is deterministic rather than a coin flip -- the bun precedes the flat white
+  // alphabetically and follows it in time.
+  it('joins a second round to the first, in the order they were placed', async () => {
+    const page = await openAndRead(TWO_ROUNDS)
+
+    await choose(page, FLAT_WHITE, 1)
+    await sendAndRead(page, TWO_ROUNDS)
+    await choose(page, CINNAMON_BUN, 1)
+    await sendAndRead(page, TWO_ROUNDS)
+
+    expect(await placedLines(page)).toEqual([`1 × ${FLAT_WHITE}`, `1 × ${CINNAMON_BUN}`])
+    await page.close()
+  })
+
+  /**
+   * The list says what was ordered and not what it cost.
+   *
+   * An order records no price, so the only price available is the menu's current
+   * one, which is the wrong number for an order placed before it moved. The menu
+   * above shows money on every row, and this reads that count too: a page that
+   * rendered no prices anywhere would satisfy the second value while showing a
+   * guest nothing at all.
+   */
+  it('shows what was ordered and not what it cost', async () => {
+    await seedOrder(NO_PRICES, [{ id: FLAT_WHITE_ID, quantity: 2 }])
+    await seedOrder(NO_PRICES, [{ id: CINNAMON_BUN_ID, quantity: 1 }])
+    const page = await openAndRead(NO_PRICES)
+
+    const menuRows = await page.locator('li .name').count()
+    expect([
+      await page.locator('[data-placed] .line').count(),
+      await page.locator('[data-placed] .price').count(),
+      await page.locator('li .price').count(),
+      menuRows > 0,
+    ]).toEqual([2, 0, menuRows, true])
+    await page.close()
+  })
+
+  // Never sent from this page, and the page shows it anyway. This is the whole
+  // difference between reading the table and remembering the tab, and it is the
+  // mechanism a guest relies on when their answer was lost and they reload.
+  it("shows the table's orders, not the ones this browser sent", async () => {
+    await seedOrder(ANOTHER_PHONE, [{ id: MISO_SOUP_ID, quantity: 1 }])
+    const page = await openAndRead(ANOTHER_PHONE)
+
+    expect([await placedState(page), await placedLines(page)]).toEqual([
+      'ready',
+      [`1 × ${MISO_SOUP}`],
+    ])
+    await page.close()
+  })
+
+  // A read that never completed. The table has an order, so an empty list here
+  // would be the page telling a guest their round is not with the kitchen.
+  it('says a read that never completed did not, rather than showing an empty table', async () => {
+    await seedOrder(NO_ANSWER, [{ id: FLAT_WHITE_ID, quantity: 1 }])
+    const page = await context.newPage()
+    await page.route(`**/tables/${NO_ANSWER}/orders`, (route) => route.abort())
+
+    const read = reading(page, NO_ANSWER)
+    await page.goto(`${origin}/t/${NO_ANSWER}`, { waitUntil: 'networkidle' })
+    await page.locator('main:not([data-state="loading"])').waitFor()
+    await read
+    await flushed(page)
+
+    expect([await placedState(page), await placedLines(page)]).toEqual(['unavailable', []])
+    await page.close()
+  })
+
+  /**
+   * A read the API refused, which is the other half and the one nothing else
+   * here reaches.
+   *
+   * `404` at this address means the table was removed while a guest sat at it --
+   * two tables merged, a card reprinted. It cannot be a code the address will not
+   * hold, because this page reached its menu with the same code against the same
+   * pattern. A status is not a failed request, and a page that treated one as an
+   * empty list while treating the other as unavailable would be green on the
+   * condition above and wrong here.
+   */
+  it('says a read the api refused did not, rather than showing an empty table', async () => {
+    await seedOrder(REMOVED, [{ id: FLAT_WHITE_ID, quantity: 1 }])
+    const page = await context.newPage()
+    await page.route(`**/tables/${REMOVED}/orders`, (route) =>
+      route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: `no table is served at ${REMOVED}` }),
+      }),
+    )
+
+    const read = reading(page, REMOVED)
+    await page.goto(`${origin}/t/${REMOVED}`, { waitUntil: 'networkidle' })
+    await page.locator('main:not([data-state="loading"])').waitFor()
+    await read
+    await flushed(page)
+
+    expect([await placedState(page), await placedLines(page)]).toEqual(['unavailable', []])
     await page.close()
   })
 })

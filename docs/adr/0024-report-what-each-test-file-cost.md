@@ -132,6 +132,26 @@ most changes will, and two machines differ by an order of magnitude. What the
 lines buy is localisation — which file a run spends its time in — rather than
 resolution.
 
+**The population this record bounds is not the one a series of runs compares.**
+The three figures above are back-to-back runs on an idle machine, a cold run
+against a warm one, and one machine against another. Comparing the same file
+across *consecutive CI runs of different commits* is a fourth, and nothing here
+said anything about it until something depended on it. Measured over three
+pushes: a file above a second, untouched between the two runs, moved as much as
+**+38%** and as little as **−27%** — both in the `tools` project — while the two
+browser files moved at most 7.4% across the same runs. A single figure for "the
+instrument" would be wrong in both directions, and a prediction narrower than the
+spread for its own project is not refutable.
+
+What survives that spread is a derived quantity rather than any figure. Summing a
+project's file lines and subtracting its step total held to ±0.1s across those
+same three pushes — because the files and the step move together when the runner
+does, and the difference subtracts the common part out. For a project whose files
+run concurrently that difference is the shorter file minus a constant, so it is
+an identity conditional on the shorter file being unchanged rather than a
+constant of the project. Read that way the lines carry a prediction; read as
+seconds they carry localisation, which is what this record already said.
+
 `verify` now reads a file that another program wrote. The pattern that reads it
 is matched against a subset of the junit payload rather than parsed, which is the
 posture `check-conventions.ts` already takes towards the YAML its workflow files

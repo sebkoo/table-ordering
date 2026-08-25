@@ -157,3 +157,12 @@ conditions and a run step, and the page that renders it is the next change — t
 same decomposition as the write, where `POST /tables/:code/orders` shipped one
 commit before the page that sends it. Until then the tree holds a path no client
 calls.
+
+It shows it from
+[ADR 0027](0027-show-the-tables-orders-on-the-guests-page.md), which is that
+change. Two things there follow from this record and are worth finding from here.
+The window becomes a sentence a guest reads, in a workspace that cannot import
+the constant it restates — so a window moved here leaves that page saying
+something untrue, and the page names this file rather than the other way round.
+And the page does not poll, because the bound above is on what one photograph of
+a placard reaches, not on how often it is asked for.

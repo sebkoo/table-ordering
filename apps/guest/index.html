@@ -55,6 +55,19 @@
       .pending, .outcome { margin: 0 0 0.75rem; }
       .pending { font-variant-numeric: tabular-nums; }
       .outcome { color: color-mix(in srgb, currentColor 70%, transparent); }
+      /* What the table has already sent. Its rows are one string rather than a
+         name and a price at opposite edges, so the flex rule above would stretch
+         a single round across the width and rule a menu's separator under
+         something that is not a menu. */
+      [data-placed] { margin-top: 2.5rem; }
+      [data-placed] h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+      [data-placed] li {
+        display: block;
+        padding: 0.25rem 0;
+        border-bottom: none;
+      }
+      .line { font-variant-numeric: tabular-nums; }
+      .none { margin: 0; color: color-mix(in srgb, currentColor 70%, transparent); }
     </style>
   </head>
   <body>

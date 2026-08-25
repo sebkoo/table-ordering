@@ -8,8 +8,8 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-25 · a table's own orders can be read back from the code
-printed on it, under the policy they were written under.
+**Status:** 2026-08-25 · a guest's page shows what has been sent from their
+table, read back from the code printed on it.
 
 ## What happens at the table
 
@@ -130,6 +130,10 @@ Flat white                                        £3.00      [ 2 ]
 Cinnamon bun                                      £4.50      [ 0 ]
 
                  [ Send to the kitchen ]
+
+Sent from this table
+  2 × Flat white
+  1 × Cinnamon bun
 ```
 
 `/r/blue-door` still answers with the same menu and no table, for a restaurant
@@ -154,6 +158,28 @@ A send the API refuses — an item that came off the menu while the guest was
 choosing — says the menu may have changed and leaves the page orderable, because
 nothing was written.
 
+**The page shows it back.** Under the button is what has already been sent from
+that table, one row per round, read from the address above. It is the table's
+list and not this phone's: a round a friend sent from their own phone is on it,
+which is what makes it an answer to "did that go through" rather than a memory of
+what this browser did.
+
+It carries no prices. An order records none, so the only price available is the
+menu's current one, which is the wrong number for an order placed before it
+moved.
+
+It asks when the page opens and again when a send from that page lands, and on
+no other occasion — no polling, because the code is printed in a public room and
+what one photograph of it reaches is bounded by that window rather than by how
+often it is asked for. So a round sent from another phone appears when this one
+sends or is reloaded, and not before.
+
+A table with nothing on it says so in as many words, and so does a read that
+failed — and they are different sentences. A page that showed an unreachable
+API as an empty table would tell a guest their food is not with the kitchen,
+which is the one thing it must never say wrongly
+([ADR 0027](docs/adr/0027-show-the-tables-orders-on-the-guests-page.md)).
+
 Nothing is written when a guest *arrives*, either. A table is a row in the
 schema, not a record of anyone's visit, and there is still no sitting: what
 groups an order is the table it was placed at and the time it was placed.
@@ -165,15 +191,15 @@ says to try again instead.
 
 ### Next
 
-1. The guest's page will show what the table has already sent, so a guest who
-   is unsure their round went through can look instead of sending it again.
-2. Staff will be able to see what every table has ordered, and what is still
+1. Staff will be able to see what every table has ordered, and what is still
    open. Both wait on something this repository does not have: a way to tell a
    staff request from a guest one. Nothing distinguishes them today, so a board
    on the addresses that exist would be a public list of every order in the
    restaurant.
-3. The menu read will move under the policy too, so that a menu query stops
+2. The menu read will move under the policy too, so that a menu query stops
    carrying its own scope.
+3. The list on the guest's page will keep itself current, so a round sent from
+   another phone at the same table appears without anyone reloading.
 
 ## How a menu request is served
 
@@ -272,6 +298,7 @@ it is started.
 | Row-level security on a write, so scope is not the query's job | Done |
 | The guest's page sends the order | Done |
 | A table's own orders, read back under the policy | Done |
+| The guest's page shows what the table has sent | Done |
 | Row-level security on a read, so a menu query drops its scope too | Planned |
 | Kitchen board | Planned |
 | Payment, as an option rather than a requirement | Planned |
@@ -395,7 +422,10 @@ server proxies `/tables` and `/restaurants` to the API, so the two are on one
 origin.
 
 Raise a quantity on a row and send. That is the same request as the `curl`
-above, under a submission id the page minted for it.
+above, under a submission id the page minted for it, and what you sent appears
+under the button — the same answer as the `GET` above, without the `curl`. Send a
+second round and it joins the first. Open the same address in another tab and
+send from there: the round shows up on both, because the list is the table's.
 
 Everything the repository checks runs in one command:
 
@@ -567,8 +597,15 @@ each with the alternatives that were rejected and why.
 - The read carries no price, because an order records none. It carries no notion
   of an order being served either: "open" means recent, not unfulfilled, and a
   status column has no writer until staff have a client.
-- No page shows any of this. The route answers, and the only things that read it
-  are its acceptance conditions and the run step above.
+- The guest's page shows the table's orders as of the last time it asked, and it
+  asks when the page opens and when a send from it lands. A round sent from
+  another phone at the same table does not appear until this page sends or is
+  reloaded, and nothing on the page says how old the list is.
+- The empty list means nothing in the last two hours, not nothing ever, and the
+  page says so in those words. That sentence restates a value the server owns —
+  `OPEN_WINDOW` — in a workspace that cannot import it, and no check holds the
+  two together: a window changed on the server leaves the page saying something
+  untrue.
 - Row-level security covers an order and its lines, written and read.
   `restaurant`, `restaurant_table` and `menu_item` carry no policy, so on a read
   of those the scope is still the query's job, exactly as it was.

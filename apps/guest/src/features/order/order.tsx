@@ -17,9 +17,15 @@
  * id for edited lines would order everything twice. A pending submission is
  * retried as it was written, or it is nothing -- and a guest who wants neither
  * closes the tab, which takes the stored submission with it.
+ *
+ * This slice owns both halves of the conversation, so what the table has already
+ * sent is rendered here rather than beside the menu: only the half that sends
+ * knows when a send landed, and lifting that signal to the menu would tell the
+ * menu slice that orders exist.
  */
 
 import { type ReactElement, useState } from 'react'
+import { Placed } from './placed.tsx'
 
 /** A menu row, with its price already formatted by the slice that owns money. */
 type Item = {
@@ -133,6 +139,10 @@ function mintSubmissionId(): string {
 export function Order({ code, items }: { code: string; items: Item[] }): ReactElement {
   const [chosen, setChosen] = useState<Record<string, number>>({})
   const [state, setState] = useState<State>(() => restore(code))
+  // How many sends have landed. Nothing reads the number: it is the key the list
+  // below is mounted under, so a send that landed makes the table's orders a new
+  // question rather than a stale answer with a row missing.
+  const [landed, setLanded] = useState(0)
   // An attribute rather than a state. Every outcome clears it, so a page that is
   // no longer busy has settled whatever it settled into, and there is no fifth
   // state for a condition to be unable to reach.
@@ -173,6 +183,10 @@ export function Order({ code, items }: { code: string; items: Item[] }): ReactEl
         sessionStorage.removeItem(keyFor(code))
         setChosen({})
         setState({ kind: 'sent' })
+        // Here and nowhere else. A refused send and one that did not go both
+        // wrote nothing, so there is nothing new for the list to find and asking
+        // again would be a request made because a request failed.
+        setLanded((sends) => sends + 1)
       } else if (response.status < 500) {
         sessionStorage.removeItem(keyFor(code))
         setState({ kind: 'refused' })
@@ -236,6 +250,8 @@ export function Order({ code, items }: { code: string; items: Item[] }): ReactEl
           {busy ? 'Sending…' : frozen ? 'Try again' : 'Send to the kitchen'}
         </button>
       </section>
+
+      <Placed key={landed} code={code} />
     </>
   )
 }

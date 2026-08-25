@@ -96,6 +96,13 @@ export const FOREIGN_KEY_VIOLATION = '23503'
  * turn over in five minutes, and no window is shorter than that -- so it is a
  * proxy for the sitting rather than a substitute for one, and it retires when a
  * sitting exists. ADR 0026.
+ *
+ * This value has a reader outside this workspace. The guest's page names the
+ * window in the sentence it shows a table with nothing at it, and `apps/guest`
+ * does not depend on `services/api`, so nothing holds the two together: a window
+ * changed here leaves that page telling a guest something untrue with no check
+ * to go red. Change `NOTHING_IN_WINDOW` in
+ * `apps/guest/src/features/order/placed.tsx` with it. ADR 0027.
  */
 export const OPEN_WINDOW = '2 hours'
 

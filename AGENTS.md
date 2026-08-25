@@ -92,6 +92,9 @@ that creates the thing it governs.
   reused for lines it was not minted for: the write path answers a repeat with
   the first order and writes nothing further, so a reused id is the second order
   going missing rather than an error.
+- A view shows a price only from a price the response carried. Nothing joins a
+  stored order to the current menu to price it: an order records no price, and
+  the menu's price today is the wrong number for an order placed before it moved.
 
 ## Change size
 
