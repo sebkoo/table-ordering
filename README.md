@@ -8,8 +8,8 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-25 · a member of staff can read every open order in their
-own restaurant, and no other restaurant's.
+**Status:** 2026-08-25 · a member of staff signs in on a page of their own and
+reads every open order in their restaurant, and no other restaurant's.
 
 ## What happens at the table
 
@@ -256,16 +256,51 @@ Open here means what it means to a guest: recent, not unserved. Nothing records
 that an order has been made, and nothing can until staff can act on one rather
 than only look at it.
 
-The board has no page yet. That is the next change.
+**And the board is a page.** Staff open a page of their own and sign in:
+
+```
+Open orders
+Ada · The Blue Door
+
+Table 7        2 × Flat white
+Table 8        1 × Cinnamon bun
+```
+
+The page holds the token and nothing else. It asks `GET /staff/sessions/current`
+who that token names rather than remembering what the sign-in answered, so the
+name written over the board and the board itself are answers about the same
+session rather than one answer and one memory.
+
+That token lives in the page's memory. Not in a cookie, not in storage, not in
+the address bar, and not in an attribute — so a reload signs staff out, and
+closing the tab is the only close there is. What says the token is nowhere else
+is not a promise in this file: it is a browser test that reads the rendered
+document, both storages, the cookie jar and the address bar, and looks for the
+value the page really carried
+([ADR 0031](docs/adr/0031-show-the-board-on-a-page-staff-sign-in-to.md)).
+
+A refused sign-in is shown in the API's own words rather than in wording this
+repository invented. A session refused at the board sends staff back to the form,
+because the remedy is signing in again; a board that could not be read says that
+instead, and the session survives. And a restaurant with nothing open says so in
+its own sentence — an empty board is a fact about a restaurant, and the other
+three are the page not knowing.
+
+It asks once, when a session opens. An order placed after that appears the next
+time somebody signs in, for the reason the guest's list does not poll either.
+
+That page asks for nothing but its own origin, and a browser is what says so —
+the same condition the guest's page carries, now written as an invariant about
+any page this repository serves rather than about one of them.
 
 ### Next
 
-1. The board will become a page rather than an address, so staff read it on a
-   screen in the kitchen instead of with `curl`.
-2. The menu read will move under the policy too, so that a menu query stops
+1. The menu read will move under the policy too, so that a menu query stops
    carrying its own scope.
-3. The list on the guest's page will keep itself current, so a round sent from
+2. The list on the guest's page will keep itself current, so a round sent from
    another phone at the same table appears without anyone reloading.
+3. The board will keep itself current the same way, and will say how long a
+   ticket has waited — the field for that is deliberately not on the answer yet.
 
 ## How a menu request is served
 
@@ -367,8 +402,9 @@ it is started.
 | The guest's page shows what the table has sent | Done |
 | A member of staff can prove who they are | Done |
 | The restaurant's open orders, read under a staff session | Done |
+| The board on a page staff sign in to | Done |
 | Row-level security on a read, so a menu query drops its scope too | Planned |
-| Kitchen board | Planned |
+| A kitchen board a ticket can be acted on from | Planned |
 | Payment, as an option rather than a requirement | Planned |
 
 ## Run it
@@ -547,6 +583,18 @@ under the button — the same answer as the `GET` above, without the `curl`. Sen
 second round and it joins the first. Open the same address in another tab and
 send from there: the round shows up on both, because the list is the table's.
 
+The board is a page of its own, on a port of its own:
+
+```sh
+pnpm dev        # the API, on port 3000
+pnpm dev:staff  # the board, on port 5174
+```
+
+Open `http://localhost:5174` and sign in as `ada@blue-door.example`, with the
+password the mint printed. What you get is the same answer as the `curl` above,
+without the token going anywhere near your shell history. Reload the page and you
+are signed out: the token was only ever in the page.
+
 Everything the repository checks runs in one command:
 
 ```sh
@@ -560,6 +608,11 @@ lockfile pins, once per machine:
 pnpm --filter @table-ordering/guest exec playwright install chromium
 ```
 
+One command for both page suites. `apps/guest` and `apps/staff` pin the same
+playwright, so they resolve to the same browser build in the same per-machine
+cache; each suite is probed for in its own workspace, so if that ever stopped
+being true the run would say which one could not launch.
+
 `pnpm install` does one thing beyond fetching dependencies: it points git at
 this repository's hooks by setting `core.hooksPath` to `.githooks` in your
 clone. That is a change to your local git configuration, and it is what makes
@@ -571,10 +624,10 @@ check had nothing to evaluate, and it says so on its own line — either because
 the commit it would inspect does not exist yet, or because the dependency it
 needs is not on this machine.
 
-Two of the checks need something this repository does not contain. `test-api`
-talks to a real PostgreSQL. `test-guest` builds the client, serves it and loads
-it in Chromium. Each is probed for before it runs, so a clone with no Docker
-gets
+Three of the checks need something this repository does not contain. `test-api`
+talks to a real PostgreSQL. `test-guest` and `test-staff` each build a client,
+serve it and load it in Chromium. Each is probed for before it runs, so a clone
+with no Docker gets
 
 ```
 test-api ......... SKIP  nothing is listening at 127.0.0.1:55432
@@ -686,6 +739,7 @@ each with the alternatives that were rejected and why.
 - [0028 Check the window where it is restated, and leave the records alone](docs/adr/0028-check-the-window-where-it-is-restated.md)
 - [0029 Verify a staff credential with scrypt, and carry it as a session token](docs/adr/0029-verify-a-staff-credential-and-carry-a-session.md)
 - [0030 Read the restaurant's open orders from the staff session, and name the table rather than its code](docs/adr/0030-read-the-restaurants-open-orders-from-the-staff-session.md)
+- [0031 Show the board on a page staff sign in to, and hold the token in memory alone](docs/adr/0031-show-the-board-on-a-page-staff-sign-in-to.md)
 
 ## Known limitations
 
@@ -736,9 +790,12 @@ each with the alternatives that were rejected and why.
   word it does not carry. The records in `docs/adr/` are outside it on purpose:
   each states what was decided on its date, and a decision that moves is
   superseded rather than rewritten.
-- A staff session cannot be closed. It expires, and until then a token that has
-  leaked is a token that works: there is no sign-out, no revocation and no
-  renewal, because the client that would ask for one does not exist yet.
+- A staff session cannot be ended by anybody but its holder. Closing the tab
+  discards the token, which is the whole of the close a client can perform; the
+  row stays open until it expires, and there is no revocation and no renewal. A
+  token that has leaked is a token that works until then, and what would end it
+  is a route ADR 0031 defers to the first session that outlives its holder's
+  client.
 - A password nobody wrote down is a staff member who needs a new row. The mint
   prints it once and stores only a value derived from it, and there is no reset
   and no way to change one.
@@ -754,8 +811,28 @@ each with the alternatives that were rejected and why.
   key beside them: a session whose restaurant is not its staff member's is
   refused by the key, and would be refused by the resolve's two-column join even
   with the key gone. Both were run rather than reasoned about.
-- The board is an address with no page. Staff reach it with a token and `curl`
-  until the page lands, which is the next change.
+- A reload signs staff out. The board's page keeps its token in memory and
+  writes it nowhere, so refreshing a screen means signing in again — and signing
+  in is memory-hard by design, so each one asks the API for about a third of a
+  second of CPU. That is the cost of the storage decision rather than an
+  oversight, and ADR 0031 names the fact that would reverse it.
+- The board asks once, when a session opens. An order placed after that is not on
+  the screen until somebody signs in again, and nothing on the page says how old
+  the list is. It is the guest list's limitation with a worse consequence: a
+  kitchen is the reader who most needs a current one.
+- The board's page states no window at all, and `open-window-restated` does not
+  read that workspace. A duration written into it would be invisible to the rule
+  rather than checked by it, which is why none is written.
+- One acceptance condition on that page cannot be made to fail by changing the
+  page. It compares two restaurants' boards, and nothing in the client can name a
+  restaurant, so no edit to it can make one board show another's rows. It is the
+  page-level restatement of a claim `board.test.ts` pins across four seeded
+  restaurants, and what it adds is that the page renders its own answer and
+  nothing else.
+- `POST /staff/sessions` answers a name and a restaurant beside the token, and
+  the page discards both — it asks `GET /staff/sessions/current` instead, so what
+  it shows is an answer about the token rather than a memory of the request that
+  minted it. Those two fields now have no reader.
 - The board shows no time. The answer carries no `placed_at`, so a page can say
   what order the tickets arrived in and not how long any of them has waited. The
   field lands with the first view that shows the waiting.
@@ -772,10 +849,10 @@ each with the alternatives that were rejected and why.
 - Signing in costs a memory-hard derivation, deliberately, so it spends about a
   third of a second of CPU and a few hundred megabytes. Nothing rate-limits it,
   because nothing is deployed.
-- The mint's own half of `credential.ts` is reached by no test, the same
-  boundary `check-push`'s CLI half sits behind. What it produces is checked
-  through the function it calls; that it prints the record on one stream and the
-  password on the other is not.
+- The mint's own half of `credential.ts` is now run by the staff page's suite,
+  which spawns it and reads a record off one stream and a password off the other
+  — so the split those two streams exist for is exercised rather than described.
+  What is still not checked is the wording it prints them with.
 - Row-level security covers an order and its lines, written and read.
   `restaurant`, `restaurant_table` and `menu_item` carry no policy, so on a read
   of those the scope is still the query's job, exactly as it was.
@@ -807,10 +884,11 @@ each with the alternatives that were rejected and why.
   nothing in the schema or the route makes a code hard to guess — the pattern
   would accept `table001`. That property lives entirely in how the code is
   minted, which is why the run steps above mint one rather than choose one.
-- Nothing serves the built page in production. The page fetches the API at a
-  relative path, which the dev server and the acceptance test each proxy; a
+- Nothing serves either built page in production. Both fetch the API at relative
+  paths, which their dev servers and their acceptance tests each proxy; a
   deployment would have to route `/tables` and `/restaurants` to the API and
-  answer `/t/<code>` and `/r/<slug>` with `index.html`.
+  answer `/t/<code>` and `/r/<slug>` with the guest's `index.html`, and route
+  `/staff` to the API and answer everything else with the staff page's.
 - A restaurant with nothing available gets a heading and an empty list. The page
   does not say that everything has sold out, though the API distinguishes it
   from a restaurant that does not exist.

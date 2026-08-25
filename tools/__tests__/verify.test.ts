@@ -130,10 +130,10 @@ describe('the step table', () => {
     expect(claimed).toEqual(projects.map((project) => project.test.name))
   })
 
-  it('probes exactly the two steps that need something outside the repository', () => {
+  it('probes exactly the three steps that need something outside the repository', () => {
     const probed = steps(RELAXED, {}).filter((step) => step.probe !== undefined)
 
-    expect(probed.map((step) => step.name)).toEqual(['test-api', 'test-guest'])
+    expect(probed.map((step) => step.name)).toEqual(['test-api', 'test-guest', 'test-staff'])
   })
 })
 
@@ -433,18 +433,20 @@ describe('what a test step reports', () => {
     expect(added).toEqual([
       ['typecheck', []],
       ['typecheck-guest', []],
+      ['typecheck-staff', []],
       ['lint', []],
       ['test-tools', REPORT_ARGS],
       ['test-api', REPORT_ARGS],
       ['test-guest', REPORT_ARGS],
+      ['test-staff', REPORT_ARGS],
       ['conventions', []],
     ])
   })
 })
 
 /**
- * Every elapsed figure a run prints goes through this: six step lines, the
- * per-file lines under three of them, and the summary. Until now nothing could
+ * Every elapsed figure a run prints goes through this: eight step lines, the
+ * per-file lines under four of them, and the summary. Until now nothing could
  * go red on it -- the details in this file were written by the test rather than
  * produced by it -- and the refactor from "a start" to "a duration" is what
  * creates the subject.

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The board</title>
+    <!--
+      The styles are inline, and the font is whatever the screen already has.
+      A stylesheet or a font from somewhere else is a request to somewhere
+      else, and a board on a screen in a kitchen does not need one. The guest
+      page says the same thing for the same reason.
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        line-height: 1.5;
+      }
+      body { margin: 0; }
+      main { max-width: 40rem; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+      h1 { font-size: 1.5rem; margin: 0 0 1.5rem; }
+      ul { list-style: none; margin: 0; padding: 0; }
+      /* Who the token names, above the board it belongs to. It sits at the
+         heading's weight minus a step, so it reads as a caption on the board
+         rather than as the first ticket on it. */
+      .who {
+        margin: -1rem 0 1.5rem;
+        color: color-mix(in srgb, currentColor 65%, transparent);
+      }
+      /* `font: inherit` on every control, because a form control otherwise
+         ignores the family set on :root and renders in the platform's own --
+         which is the one thing this page says it does not go and fetch. */
+      .field, .sign-in {
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+        border-radius: 0.375rem;
+      }
+      .field { width: 100%; padding: 0.5rem 0.625rem; }
+      form { display: flex; flex-direction: column; gap: 0.75rem; max-width: 22rem; }
+      label { display: flex; flex-direction: column; gap: 0.25rem; }
+      .label { font-size: 0.875rem; color: color-mix(in srgb, currentColor 70%, transparent); }
+      .sign-in { padding: 0.875rem 1rem; border-color: currentColor; }
+      .field:disabled, .sign-in:disabled { opacity: 0.45; }
+      /* What the server said, in its own words. Nothing on this page writes a
+         sentence into this element. */
+      .said { margin: 0 0 0.75rem; color: color-mix(in srgb, currentColor 70%, transparent); }
+      /* A ticket. The table is what a member of staff walks to, so it leads the
+         row and keeps its width while the lines take the slack. */
+      [data-board] li {
+        display: flex;
+        gap: 1.5rem;
+        padding: 0.75rem 0;
+        border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+      }
+      .table { min-width: 8rem; font-variant-numeric: tabular-nums; }
+      .lines { flex: 1; }
+      .none { margin: 0; color: color-mix(in srgb, currentColor 70%, transparent); }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

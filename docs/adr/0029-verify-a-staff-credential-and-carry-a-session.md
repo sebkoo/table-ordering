@@ -230,3 +230,20 @@ do: with the key dropped and a straddling session seeded anyway, the resolve's
 two-column join refuses the token before the key would have been consulted. The
 board's page is still the change after, so the second half of the gap above is
 still open.
+
+Two rows of the deferral table above have since fired, and both fired at the
+same subject: the board's page,
+[ADR 0031](0031-show-the-board-on-a-page-staff-sign-in-to.md). **A cookie rather
+than a header** was re-deferred there rather than taken — the page holds its
+token in memory and stores it nowhere, so there is no persisted value for
+`HttpOnly` to protect and no ambient credential to answer for — and it now waits
+on a staff client that must survive a reload with nobody present, or on the first
+staff request that writes. **Signing out** was re-deferred beside it, because
+discarding a token held in memory is what closing that client already does; what
+a route would add is ending a session somebody else holds, and it waits on the
+same gate. The remaining four rows are untouched.
+
+The gap this record declared is closed. Both addresses now have a client: ADR
+0030's board consumes the resolve, and ADR 0031's page consumes
+`GET /staff/sessions/current` as the only thing it will say who is signed in
+from.

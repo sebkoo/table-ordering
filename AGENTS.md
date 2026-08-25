@@ -58,14 +58,20 @@ that creates the thing it governs.
   never as itself: a password as a key derivation record carrying the parameters
   it was made with, a session token as a digest. It is compared in constant
   time, and it travels in a header rather than in a path or a query string.
+- A secret a page is handed is held in memory for as long as that page is open
+  and put nowhere else: not in a URL, a query string, an attribute, a cookie or
+  either storage. A browser reads the rendered document, both storages, the
+  cookie jar and the address bar, and looks for the value the page really
+  carried rather than for one the check minted itself.
 - A table is identified by the code printed on it. The code is unique across
   restaurants, is not derived from the table's label, and is not a secret: it is
   printed in public view, so holding it authorises nothing.
 - A release too new for pnpm's minimum release age is pinned back to an older
   release. The exclusion list is not used, because an exclusion satisfies the
   install by removing the check.
-- A fresh load of the guest page reaches no origin but its own. No remote font,
-  script, image, analytics or beacon, and a browser is what says so.
+- A fresh load of a page this repository serves reaches no origin but its own.
+  No remote font, script, image, analytics or beacon, and a browser is what says
+  so.
 - A dependency a check needs from outside this repository is probed for
   explicitly, before the check runs, and its absence is reported as a skip that
   names it. A `try`/`catch` around the work is not a probe: it cannot tell a

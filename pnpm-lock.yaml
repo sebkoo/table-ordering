@@ -49,6 +49,34 @@ importers:
         specifier: 8.2.1
         version: 8.2.1(@types/node@26.2.0)
 
+  apps/staff:
+    dependencies:
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: 19.2.8
+        version: 19.2.8(react@19.2.8)
+    devDependencies:
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
+      '@types/react':
+        specifier: 19.2.18
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: 19.2.4
+        version: 19.2.4(@types/react@19.2.18)
+      pg:
+        specifier: 8.23.0
+        version: 8.23.0
+      playwright:
+        specifier: 1.62.1
+        version: 1.62.1
+      vite:
+        specifier: 8.2.1
+        version: 8.2.1(@types/node@26.2.0)
+
   services/api:
     dependencies:
       fastify:

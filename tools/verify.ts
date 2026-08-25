@@ -6,7 +6,7 @@
  * The convention checks print their own per-rule lines; this file streams them
  * through untouched instead of summarising them a second time.
  *
- * Two of the steps need something this repository does not contain: a
+ * Three of the steps need something this repository does not contain: a
  * PostgreSQL to talk to, and a browser to load a page in. Neither absence is a
  * statement about the code, so each is probed for before its step runs and
  * reported as a SKIP that names what is missing. `--require-environment` turns
@@ -175,6 +175,15 @@ export function steps(options: Options, env: NodeJS.ProcessEnv): Step[] {
       args: ['--noEmit', '-p', join(root, 'apps', 'guest', 'tsconfig.json')],
       stream: false,
     },
+    // A third configuration rather than a wider second one. Each app's tsconfig
+    // includes its own `src`, so one config covering both would be a fourth
+    // place that knows where the apps are, and a step named after neither.
+    {
+      name: 'typecheck-staff',
+      command: localBin('tsc'),
+      args: ['--noEmit', '-p', join(root, 'apps', 'staff', 'tsconfig.json')],
+      stream: false,
+    },
     { name: 'lint', command: localBin('biome'), args: ['check', '.'], stream: false },
     // One step per vitest project, rather than one for all of them. A single
     // step would take the tool suites down with the database: they need
@@ -191,6 +200,19 @@ export function steps(options: Options, env: NodeJS.ProcessEnv): Step[] {
       probe: async (): Promise<Presence> => {
         const reachable = await database()
         return reachable.present ? probeBrowser(join(root, 'apps', 'guest')) : reachable
+      },
+    },
+    // The browser is probed for in this workspace and not in the one above,
+    // because that is where this step's suite resolves `playwright` from. The
+    // two resolve to one version and therefore to one per-machine browser, so a
+    // single install serves both -- and if that ever stopped being true, this
+    // probe would say so on its own line rather than failing inside a suite.
+    {
+      name: 'test-staff',
+      ...vitest('staff'),
+      probe: async (): Promise<Presence> => {
+        const reachable = await database()
+        return reachable.present ? probeBrowser(join(root, 'apps', 'staff')) : reachable
       },
     },
     {

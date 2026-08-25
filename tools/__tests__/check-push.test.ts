@@ -86,6 +86,25 @@ const counted = (count: number): RunWarnings => ({ read: true, count })
 
 const EXPECTED = expectedStepNames()
 
+/**
+ * The steps `verify` printed when the two captures below were taken.
+ *
+ * A capture is history and stays as written; what it has to be read against is
+ * the declaration of its own era, not this one. When `typecheck-staff` and
+ * `test-staff` were added, `expectedStepNames()` began naming two steps neither
+ * log contains -- and rewriting the logs to hold them would have made them
+ * captures of a run that never happened, which is exactly what makes a capture
+ * worth keeping.
+ *
+ * So the conditions that read `GREEN` and `LOCAL` compare them with this, and
+ * the conditions that assert what *today's* declaration demands -- the empty log
+ * below, and the step list itself -- go on using `EXPECTED`. Written out rather
+ * than sliced from `EXPECTED`, because a prefix of the current list would move
+ * whenever a step was inserted rather than appended, and this is a fact about
+ * two files that will not move again.
+ */
+const AS_CAPTURED = ['typecheck', 'typecheck-guest', 'lint', 'test-tools', 'test-api', 'test-guest']
+
 /** The same log with one line rewritten, which is how a difference is produced. */
 function withLine(log: string, find: string, replace: string): string {
   if (!log.includes(find)) throw new Error(`the fixture carries no line matching: ${find}`)
@@ -108,23 +127,25 @@ describe('the log of the run for a revision', () => {
     expect(details(runVerifiedViolations(read(''), EXPECTED))).toEqual([
       'typecheck: no verdict line in the log',
       'typecheck-guest: no verdict line in the log',
+      'typecheck-staff: no verdict line in the log',
       'lint: no verdict line in the log',
       'test-tools: no verdict line in the log',
       'test-api: no verdict line in the log',
       'test-guest: no verdict line in the log',
+      'test-staff: no verdict line in the log',
       'the convention checks: no counts line in the log',
       'the run: no verify summary line in the log',
     ])
   })
 
   it('passes on the log a real green run produced', () => {
-    expect(runVerifiedViolations(read(GREEN), EXPECTED)).toEqual([])
+    expect(runVerifiedViolations(read(GREEN), AS_CAPTURED)).toEqual([])
   })
 
   it('fails when a step it expects is absent, naming that step', () => {
     const missing = withLine(GREEN, 'test-guest ....... PASS  3.0s', 'test-guest built nothing')
 
-    expect(details(runVerifiedViolations(read(missing), EXPECTED))).toEqual([
+    expect(details(runVerifiedViolations(read(missing), AS_CAPTURED))).toEqual([
       'test-guest: no verdict line in the log',
     ])
   })
@@ -142,7 +163,7 @@ describe('the log of the run for a revision', () => {
       'verify: PASS  8.4s  (skipped: test-api)',
     )
 
-    expect(details(runVerifiedViolations(read(skipped), EXPECTED))).toEqual([
+    expect(details(runVerifiedViolations(read(skipped), AS_CAPTURED))).toEqual([
       'test-api: SKIP  nothing is listening at 127.0.0.1:55432',
       'the run: steps were skipped: test-api',
     ])
@@ -159,7 +180,7 @@ describe('the log of the run for a revision', () => {
       '4 checks: 3 PASS, 0 FAIL, 1 SKIP',
     )
 
-    expect(details(runVerifiedViolations(read(skipped), EXPECTED))).toEqual([
+    expect(details(runVerifiedViolations(read(skipped), AS_CAPTURED))).toEqual([
       'readme-status-date: SKIP  no commit has changed README.md yet',
       'the convention checks: 4 checks: 3 PASS, 0 FAIL, 1 SKIP',
     ])
@@ -172,7 +193,7 @@ describe('the log of the run for a revision', () => {
       '0 checks: 0 PASS, 0 FAIL, 0 SKIP',
     )
 
-    expect(details(runVerifiedViolations(read(empty), EXPECTED))).toEqual([
+    expect(details(runVerifiedViolations(read(empty), AS_CAPTURED))).toEqual([
       'the convention checks: inspected nothing: 0 checks: 0 PASS, 0 FAIL, 0 SKIP',
     ])
   })
@@ -188,7 +209,7 @@ describe('the log of the run for a revision', () => {
       'verify: FAIL  8.4s',
     )
 
-    expect(details(runVerifiedViolations(read(failed), EXPECTED))).toEqual([
+    expect(details(runVerifiedViolations(read(failed), AS_CAPTURED))).toEqual([
       'lint: FAIL  0.1s',
       'the run: verify: FAIL  8.4s',
     ])
@@ -211,10 +232,12 @@ describe('the log of the run for a revision', () => {
     expect(EXPECTED).toEqual([
       'typecheck',
       'typecheck-guest',
+      'typecheck-staff',
       'lint',
       'test-tools',
       'test-api',
       'test-guest',
+      'test-staff',
     ])
     expect(EXPECTED).not.toContain('conventions')
   })
@@ -305,7 +328,7 @@ describe('a log carrying a line per test file', () => {
   })
 
   it('reports no difference from the declaration for a green run of it', () => {
-    expect(runVerifiedViolations(read(LOCAL), EXPECTED)).toEqual([])
+    expect(runVerifiedViolations(read(LOCAL), AS_CAPTURED)).toEqual([])
   })
 })
 
@@ -320,7 +343,7 @@ describe('a log carrying a line per test file', () => {
  */
 describe('the timings a passing run reports', () => {
   it('carries the run, the line count, the elapsed and the job span', () => {
-    const report = runVerifiedReport(GREEN_RUN, read(GREEN), GREEN_JOBS, counted(0), EXPECTED)
+    const report = runVerifiedReport(GREEN_RUN, read(GREEN), GREEN_JOBS, counted(0), AS_CAPTURED)
 
     expect(report.verdict).toBe('PASS')
     expect(report.detail).toBe(
@@ -335,7 +358,7 @@ describe('the timings a passing run reports', () => {
     const slower = withLine(GREEN, 'verify: PASS  8.4s', 'verify: PASS  8.5s')
 
     expect(
-      runVerifiedReport(GREEN_RUN, read(slower), GREEN_JOBS, counted(0), EXPECTED).detail,
+      runVerifiedReport(GREEN_RUN, read(slower), GREEN_JOBS, counted(0), AS_CAPTURED).detail,
     ).toBe('run 32298949382, 10 verdict lines, all PASS, verify: 8.5s in 147s of jobs, 0 warnings')
   })
 
@@ -344,15 +367,15 @@ describe('the timings a passing run reports', () => {
   it('reads an elapsed figure wider than the one in the fixture', () => {
     const wider = withLine(GREEN, 'verify: PASS  8.4s', 'verify: PASS  10.7s')
 
-    expect(runVerifiedReport(GREEN_RUN, read(wider), GREEN_JOBS, counted(0), EXPECTED).detail).toBe(
-      'run 32298949382, 10 verdict lines, all PASS, verify: 10.7s in 147s of jobs, 0 warnings',
-    )
+    expect(
+      runVerifiedReport(GREEN_RUN, read(wider), GREEN_JOBS, counted(0), AS_CAPTURED).detail,
+    ).toBe('run 32298949382, 10 verdict lines, all PASS, verify: 10.7s in 147s of jobs, 0 warnings')
   })
 
   // A figure that cannot be had is a violation, never a clause left off a PASS
   // line. The line would otherwise read as a complete report of a green run.
   it('fails when gh reported no jobs, rather than dropping the span', () => {
-    const report = runVerifiedReport(GREEN_RUN, read(GREEN), [], counted(0), EXPECTED)
+    const report = runVerifiedReport(GREEN_RUN, read(GREEN), [], counted(0), AS_CAPTURED)
 
     expect(report.verdict).toBe('FAIL')
     expect(details([...report.violations])).toEqual([
@@ -366,7 +389,7 @@ describe('the timings a passing run reports', () => {
       read(GREEN),
       [{ startedAt: '2026-08-19T20:31:06Z', completedAt: '' }],
       counted(0),
-      EXPECTED,
+      AS_CAPTURED,
     )
 
     expect(details([...report.violations])).toEqual([
@@ -381,7 +404,7 @@ describe('the timings a passing run reports', () => {
 
     expect(
       details([
-        ...runVerifiedReport(GREEN_RUN, read(missing), [], counted(0), EXPECTED).violations,
+        ...runVerifiedReport(GREEN_RUN, read(missing), [], counted(0), AS_CAPTURED).violations,
       ]),
     ).toEqual([
       'lint: no verdict line in the log',
@@ -407,15 +430,15 @@ describe('the warning annotations the run carried', () => {
   // action pinned in `ci.yml` moved. Singular, and the fixture that would catch
   // a missing plural rule differs from it at its final character alone.
   it('carries the count it was given, singular at one', () => {
-    expect(runVerifiedReport(GREEN_RUN, read(GREEN), GREEN_JOBS, counted(1), EXPECTED).detail).toBe(
-      'run 32298949382, 10 verdict lines, all PASS, verify: 8.4s in 147s of jobs, 1 warning',
-    )
+    expect(
+      runVerifiedReport(GREEN_RUN, read(GREEN), GREEN_JOBS, counted(1), AS_CAPTURED).detail,
+    ).toBe('run 32298949382, 10 verdict lines, all PASS, verify: 8.4s in 147s of jobs, 1 warning')
   })
 
   it('is plural above one', () => {
-    expect(runVerifiedReport(GREEN_RUN, read(GREEN), GREEN_JOBS, counted(2), EXPECTED).detail).toBe(
-      'run 32298949382, 10 verdict lines, all PASS, verify: 8.4s in 147s of jobs, 2 warnings',
-    )
+    expect(
+      runVerifiedReport(GREEN_RUN, read(GREEN), GREEN_JOBS, counted(2), AS_CAPTURED).detail,
+    ).toBe('run 32298949382, 10 verdict lines, all PASS, verify: 8.4s in 147s of jobs, 2 warnings')
   })
 
   // The clause prints at zero rather than being left off. Omitted there, a count
@@ -427,7 +450,7 @@ describe('the warning annotations the run carried', () => {
       read(GREEN),
       GREEN_JOBS,
       counted(0),
-      EXPECTED,
+      AS_CAPTURED,
     ).detail
 
     expect(detail).toBe(
@@ -445,7 +468,7 @@ describe('the warning annotations the run carried', () => {
       read(GREEN),
       GREEN_JOBS,
       { read: false, reason: 'HTTP 404: Not Found' },
-      EXPECTED,
+      AS_CAPTURED,
     )
 
     expect(report.verdict).toBe('FAIL')
@@ -466,7 +489,7 @@ describe('the warning annotations the run carried', () => {
           read(missing),
           [],
           { read: false, reason: 'HTTP 404: Not Found' },
-          EXPECTED,
+          AS_CAPTURED,
         ).violations,
       ]),
     ).toEqual([

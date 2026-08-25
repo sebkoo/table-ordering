@@ -209,3 +209,12 @@ it one.
 **Nothing here fires ADR 0021's price snapshot or its sitting**, and nothing
 fires the status column. This is the second view of a stored order, it shows no
 money, it closes no table and it marks nothing.
+
+The page this record named as the next change is
+[ADR 0031](0031-show-the-board-on-a-page-staff-sign-in-to.md), and with it the
+consumer gap ADR 0029 declared is closed in both halves: `GET /staff/orders` is
+read by the board that page draws, and `GET /staff/sessions/current` is what that
+page names the signed-in staff member from. The answer's shape survived contact
+with its first client unchanged — no `placedAt`, no grouping by table, no code
+beside the label — and the two fields this record left for a later view are still
+waiting on the same views.
