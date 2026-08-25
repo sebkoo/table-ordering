@@ -8,8 +8,8 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-22 · a guest sends their order from the page, and a send
-repeated across a reload is still one order.
+**Status:** 2026-08-25 · a table's own orders can be read back from the code
+printed on it, under the policy they were written under.
 
 ## What happens at the table
 
@@ -96,6 +96,30 @@ A line naming an item that is not on that restaurant's menu is refused `422` and
 nothing at all is written, not even the lines that were fine. A code no table
 uses is `404`, as it is for the menu.
 
+That table can also be read back:
+
+```
+GET /tables/9f3c1a7b20de/orders
+```
+
+```json
+{
+  "orders": [
+    { "id": "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", "lines": [{ "name": "Flat white", "quantity": 2 }] }
+  ]
+}
+```
+
+The orders placed at that table in the last two hours, each with what was
+ordered and how much of it. A table nobody has ordered at is `200` with an empty
+list; a code no table uses is still `404`.
+
+Holding the code is the whole of what that asks for, as it is for the menu and
+for sending an order — so what it reaches is bounded in time rather than by a
+secret. Two hours is a meal in progress rather than a record of the table, and
+it is a proxy for a sitting rather than a substitute for one
+([ADR 0026](docs/adr/0026-read-a-tables-open-orders-by-its-printed-code.md)).
+
 A guest opens `/t/9f3c1a7b20de` on their phone and gets that menu as a page:
 
 ```
@@ -141,10 +165,14 @@ says to try again instead.
 
 ### Next
 
-1. The kitchen will see the ticket. A kitchen client that drops off the network
-   will be able to reconnect and pick up where it left off.
-2. Staff will be able to see what each table has ordered and what is still open.
-3. The read path will move under the policy too, so that a menu query stops
+1. The guest's page will show what the table has already sent, so a guest who
+   is unsure their round went through can look instead of sending it again.
+2. Staff will be able to see what every table has ordered, and what is still
+   open. Both wait on something this repository does not have: a way to tell a
+   staff request from a guest one. Nothing distinguishes them today, so a board
+   on the addresses that exist would be a public list of every order in the
+   restaurant.
+3. The menu read will move under the policy too, so that a menu query stops
    carrying its own scope.
 
 ## How a menu request is served
@@ -212,6 +240,13 @@ A statement that establishes no scope at all is refused rather than quietly
 narrowed: `current_setting` raises on a connection that has never carried the
 setting, and the empty string it reverts to afterwards fails the `::uuid` cast.
 
+Reading those orders back is the same transaction with no write in it. The code
+resolves, the scope is set from the row it resolved to, and the select then
+names no restaurant at all: `table_order` and `table_order_line` carry `for all`
+policies, so the `using` clause is what scopes the read. It is the first read
+here that a policy scopes, and it needed no migration — the tables were already
+enabled and the application role already held `select`.
+
 ## Why
 
 Every table-ordering product I looked at wanted a percentage of card volume, a
@@ -236,6 +271,7 @@ it is started.
 | Order submission over HTTP, tolerating retries | Done |
 | Row-level security on a write, so scope is not the query's job | Done |
 | The guest's page sends the order | Done |
+| A table's own orders, read back under the policy | Done |
 | Row-level security on a read, so a menu query drops its scope too | Planned |
 | Kitchen board | Planned |
 | Payment, as an option rather than a requirement | Planned |
@@ -332,6 +368,18 @@ Run that second command again with the same `$submission` and it answers the
 same id, and the order is still one order with one line. Change
 `9f3c1a7b20de` to another table's code while keeping `$submission` and it
 answers `409`.
+
+Read that table's orders back:
+
+```sh
+curl -s localhost:3000/tables/9f3c1a7b20de/orders
+```
+
+```json
+{"orders":[{"id":"1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed","lines":[{"name":"Flat white","quantity":2}]}]}
+```
+
+Anything placed more than two hours ago is not in that list.
 
 The page a guest opens is a second process in development:
 
@@ -483,6 +531,7 @@ each with the alternatives that were rejected and why.
 - [0023 Mint a submission id per send, and keep it until the API answers](docs/adr/0023-mint-a-submission-id-per-send.md)
 - [0024 Report what each test file cost, and assert nothing about it](docs/adr/0024-report-what-each-test-file-cost.md)
 - [0025 Check the subject clauses a program can decide, and say which one it cannot](docs/adr/0025-make-the-subject-clauses-executable.md)
+- [0026 Read a table's open orders by its printed code, and defer the board to a staff identity](docs/adr/0026-read-a-tables-open-orders-by-its-printed-code.md)
 
 ## Known limitations
 
@@ -498,12 +547,31 @@ each with the alternatives that were rejected and why.
 - The page cannot say which item a refused order was refused for. The route
   answers `422` with the fact that an item on the order is not on that menu, and
   not with which one.
-- Nothing reads an order. It is written, it is scoped, and no route selects one
-  — so the only thing that has ever looked at a stored order is the check that
-  asserts it was stored correctly.
-- Row-level security covers what an order writes and nothing else. `restaurant`,
-  `restaurant_table` and `menu_item` carry no policy, so on a read the scope is
-  still the query's job, exactly as it was.
+- Anyone holding a table's code can read what that table ordered in the last two
+  hours. The code is printed in a public room and cannot be revoked without
+  reprinting the card, so that reaches a passer-by who photographed it as well
+  as the people sitting there. It is bounded to one table, adds no way to find
+  another, and is dominated by the write the same code already allows — a
+  stranger with the code can order to that table, which is the greater harm.
+  It is still a disclosure, and the window is what bounds it.
+- Nothing in the system can tell a code that was minted from one that was
+  chosen. The schema accepts `table001`, the route's pattern constrains alphabet
+  and length rather than choice, and the 48 bits `openssl rand -hex 6` produces
+  come from an instruction in this file and nowhere else. The read above rests
+  on that instruction having been followed.
+- The two-hour window is a proxy for a sitting, not a substitute. A party
+  arriving at a table the previous party left within the window sees the
+  previous party's order. No window closes that, because parties can be minutes
+  apart; the row that would is deferred to the first view that can close a
+  table.
+- The read carries no price, because an order records none. It carries no notion
+  of an order being served either: "open" means recent, not unfulfilled, and a
+  status column has no writer until staff have a client.
+- No page shows any of this. The route answers, and the only things that read it
+  are its acceptance conditions and the run step above.
+- Row-level security covers an order and its lines, written and read.
+  `restaurant`, `restaurant_table` and `menu_item` carry no policy, so on a read
+  of those the scope is still the query's job, exactly as it was.
 - **A menu item that has been ordered cannot be removed from the menu.** The
   order line's foreign key to `menu_item` is `NO ACTION`, so the delete is
   refused. Deleting the whole restaurant is refused too, and by the same

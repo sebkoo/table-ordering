@@ -27,7 +27,7 @@ import type { FastifyInstance } from 'fastify'
 import { Pool, type PoolClient } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from '../../main.ts'
-import { SET_SCOPE } from './sql.ts'
+import { OPEN_ORDERS_AT_TABLE, OPEN_WINDOW, type OpenOrderRow, SET_SCOPE } from './sql.ts'
 
 /**
  * The migration role, which owns the tables. `main.ts`'s default is the
@@ -71,6 +71,42 @@ const BLUE_CODE_2 = '71bd0e4c8a26'
 const FLAT_WHITE = 'a0000000-0000-4000-8000-000000000001'
 const CINNAMON_BUN = 'a0000000-0000-4000-8000-000000000002'
 const RED_PINT = 'a0000000-0000-4000-8000-000000000003'
+
+/**
+ * One table per read condition.
+ *
+ * The write conditions share `BLUE_CODE_1` because each filters what it asserts
+ * by its own submission id. A read has no such filter -- it takes what the table
+ * holds -- so a shared table would make every count a tally of what a neighbour
+ * left behind.
+ */
+const READ_ROUNDS = '5e2a9c14f07b'
+const READ_EMPTY = 'a83f16d0c9e2'
+const READ_NO_LINES = 'd47b028ea6c1'
+const READ_SEQUENCE = 'b1c60fa3d85e'
+const READ_WINDOW = '9024e7bc51fa'
+const READ_SCOPED = 'f6d3b90a27ce'
+
+const READ_ROUNDS_TABLE = 'b0000000-0000-4000-8000-000000000004'
+const READ_EMPTY_TABLE = 'b0000000-0000-4000-8000-000000000005'
+const READ_NO_LINES_TABLE = 'b0000000-0000-4000-8000-000000000006'
+const READ_SEQUENCE_TABLE = 'b0000000-0000-4000-8000-000000000007'
+const READ_WINDOW_TABLE = 'b0000000-0000-4000-8000-000000000008'
+const READ_SCOPED_TABLE = 'b0000000-0000-4000-8000-000000000009'
+
+/**
+ * Two orders whose ids sort the opposite way to their `placed_at`, which is what
+ * makes the sequence decidable: ordering by id alone returns them reversed, and
+ * a condition that read the right sequence by luck would not.
+ */
+const SEQUENCE_EARLY = 'c0000000-0000-4000-8000-00000000000b'
+const SEQUENCE_LATE = 'c0000000-0000-4000-8000-00000000000a'
+
+const NO_LINES_ORDER = 'c0000000-0000-4000-8000-000000000003'
+/** 100 minutes and 3 hours old, so the pair brackets a two-hour window from both sides. */
+const WINDOW_INSIDE = 'c0000000-0000-4000-8000-000000000004'
+const WINDOW_OUTSIDE = 'c0000000-0000-4000-8000-000000000005'
+const SCOPED_ORDER = 'c0000000-0000-4000-8000-000000000006'
 
 /** Seeded in `beforeAll` for the conditions that read a policy rather than a route. */
 const SEEDED_BLUE_ORDER = 'c0000000-0000-4000-8000-000000000001'
@@ -231,6 +267,82 @@ beforeAll(async () => {
     ],
   )
 
+  // The tables the read conditions use, and the orders seeded at four of them.
+  // Seeded rather than posted because a route cannot place an order in the past,
+  // cannot place one with no lines, and cannot choose the ids that make a
+  // sequence decidable -- and each of those is what one condition below is for.
+  await owner.query(
+    `insert into restaurant_table (id, restaurant_id, code, label) values
+       ($2, $1, $3, 'Table 11'),
+       ($4, $1, $5, 'Table 12'),
+       ($6, $1, $7, 'Table 13'),
+       ($8, $1, $9, 'Table 14'),
+       ($10, $1, $11, 'Table 15'),
+       ($12, $1, $13, 'Table 16')`,
+    [
+      BLUE,
+      READ_ROUNDS_TABLE,
+      READ_ROUNDS,
+      READ_EMPTY_TABLE,
+      READ_EMPTY,
+      READ_NO_LINES_TABLE,
+      READ_NO_LINES,
+      READ_SEQUENCE_TABLE,
+      READ_SEQUENCE,
+      READ_WINDOW_TABLE,
+      READ_WINDOW,
+      READ_SCOPED_TABLE,
+      READ_SCOPED,
+    ],
+  )
+  await owner.query(
+    `insert into table_order (id, restaurant_id, table_id, submission_id, placed_at) values
+       ($2, $1, $3, $4, now()),
+       ($5, $1, $6, $7, now() - interval '10 minutes'),
+       ($8, $1, $6, $9, now() - interval '5 minutes'),
+       ($10, $1, $11, $12, now() - interval '100 minutes'),
+       ($13, $1, $11, $14, now() - interval '3 hours'),
+       ($15, $1, $16, $17, now())`,
+    [
+      BLUE,
+      NO_LINES_ORDER,
+      READ_NO_LINES_TABLE,
+      submission(903),
+      SEQUENCE_EARLY,
+      READ_SEQUENCE_TABLE,
+      submission(904),
+      SEQUENCE_LATE,
+      submission(905),
+      WINDOW_INSIDE,
+      READ_WINDOW_TABLE,
+      submission(906),
+      WINDOW_OUTSIDE,
+      submission(907),
+      SCOPED_ORDER,
+      READ_SCOPED_TABLE,
+      submission(908),
+    ],
+  )
+  // No line for NO_LINES_ORDER. That is the fixture, not an omission.
+  await owner.query(
+    `insert into table_order_line (order_id, restaurant_id, menu_item_id, quantity) values
+       ($2, $1, $3, 1),
+       ($4, $1, $5, 2),
+       ($6, $1, $3, 1),
+       ($7, $1, $5, 1),
+       ($8, $1, $3, 1)`,
+    [
+      BLUE,
+      SEQUENCE_EARLY,
+      FLAT_WHITE,
+      SEQUENCE_LATE,
+      CINNAMON_BUN,
+      WINDOW_INSIDE,
+      WINDOW_OUTSIDE,
+      SCOPED_ORDER,
+    ],
+  )
+
   app = new Pool({
     connectionString: asAppRole(CONNECTION_STRING),
     options: `-c search_path=${SCHEMA}`,
@@ -367,6 +479,122 @@ describe('the order a guest sends from their table', () => {
     expect([zero.status, empty.status]).toEqual([400, 400])
     expect(await ordersFor(submission(8))).toEqual([])
     expect(await ordersFor(submission(9))).toEqual([])
+  })
+})
+
+/**
+ * The read a printed code reaches.
+ *
+ * The subject is the scope, and it is where this can be wrong while looking
+ * right: a statement carrying `and o.restaurant_id = ...` answers every one of
+ * these conditions identically to a statement scoped by the policy. Only the
+ * condition that varies the scope over one statement can tell them apart, and it
+ * is the one that drives the statement rather than the route.
+ */
+describe('the orders a guest reads back from their table', () => {
+  const getOrders = (code: string): Promise<Response> => fetch(`${origin}/tables/${code}/orders`)
+
+  /** Line sets as sorted text, so a condition can assert content without asserting sequence. */
+  function lineSets(orders: { lines: { name: string; quantity: number }[] }[]): string[] {
+    return orders.map((o) => o.lines.map((l) => `${l.quantity} × ${l.name}`).join(', ')).sort()
+  }
+
+  it('reads back the orders sent at that table', async () => {
+    const [one, two] = [submission(20), submission(21)]
+    const first = await postOrder(
+      READ_ROUNDS,
+      order(one, [{ menuItemId: FLAT_WHITE, quantity: 2 }]),
+    )
+    const second = await postOrder(
+      READ_ROUNDS,
+      order(two, [{ menuItemId: CINNAMON_BUN, quantity: 1 }]),
+    )
+    expect([first.status, second.status]).toEqual([201, 201])
+
+    const response = await getOrders(READ_ROUNDS)
+    const body = (await response.json()) as {
+      orders?: { lines: { name: string; quantity: number }[] }[]
+    }
+
+    // Content, not sequence. Both ids were minted by the route, so which of them
+    // sorts first is a property of gen_random_uuid rather than of this API. The
+    // sequence has a condition of its own, with ids chosen to make it decidable.
+    expect([response.status, body.orders && lineSets(body.orders)]).toEqual([
+      200,
+      ['1 × Cinnamon bun', '2 × Flat white'],
+    ])
+  })
+
+  // A table nobody has ordered at is not a table nobody is served at, and the
+  // menu slice already makes that distinction for a restaurant that has sold out.
+  it('answers a table with nothing at it with an empty list, not a 404', async () => {
+    const response = await getOrders(READ_EMPTY)
+    expect([response.status, await response.json()]).toEqual([200, { orders: [] }])
+  })
+
+  it('refuses a code no table is served at, and lists nothing', async () => {
+    const response = await getOrders('000000000000')
+    expect([response.status, await response.json()]).toEqual([
+      404,
+      { error: 'no table is served at 000000000000' },
+    ])
+  })
+
+  // The condition the read turns on, and it is a comparison rather than an
+  // assertion: one statement, three scopes. A statement that scoped itself would
+  // answer the same under both restaurants, and a policy that was not applying
+  // would too.
+  it('is scoped by the policy rather than by the statement', async () => {
+    const read = (client: PoolClient) =>
+      client.query<OpenOrderRow>(OPEN_ORDERS_AT_TABLE, [READ_SCOPED_TABLE, OPEN_WINDOW])
+
+    const owning = await scoped(app, BLUE, read)
+    const other = await scoped(app, RED, read)
+
+    // A pool of its own, because the code a missing scope raises depends on the
+    // connection's history: one that has never carried the setting raises 42704,
+    // and one that has reads back the empty string and fails the cast with
+    // 22P02. The two reads above have just scoped a connection on `app`.
+    const unscoped = new Pool({
+      connectionString: asAppRole(CONNECTION_STRING),
+      options: `-c search_path=${SCHEMA}`,
+      max: 1,
+    })
+    let none: string
+    try {
+      none = await sqlstate(() =>
+        unscoped.query(OPEN_ORDERS_AT_TABLE, [READ_SCOPED_TABLE, OPEN_WINDOW]),
+      )
+    } finally {
+      await unscoped.end()
+    }
+
+    expect([owning.rowCount, other.rowCount, none]).toEqual([1, 0, '42704'])
+  })
+
+  // "No order" and "an order with nothing on it" are different answers, and a
+  // reader that cannot tell them apart reports the second as the first.
+  it('reads an order with no lines as an order with an empty list', async () => {
+    const response = await getOrders(READ_NO_LINES)
+    expect(await response.json()).toEqual({ orders: [{ id: NO_LINES_ORDER, lines: [] }] })
+  })
+
+  it('reads orders back in the order they were placed', async () => {
+    const response = await getOrders(READ_SEQUENCE)
+    const body = (await response.json()) as { orders?: { id: string }[] }
+    expect([response.status, body.orders?.map((one) => one.id)]).toEqual([
+      200,
+      [SEQUENCE_EARLY, SEQUENCE_LATE],
+    ])
+  })
+
+  // The window, bracketed from both sides: 100 minutes is inside two hours and
+  // three hours is outside it. A pair seeded at now() and three hours ago would
+  // pass for any window between one minute and three hours.
+  it('reads the orders inside the window and not the ones outside it', async () => {
+    const response = await getOrders(READ_WINDOW)
+    const body = (await response.json()) as { orders?: { id: string }[] }
+    expect([response.status, body.orders?.map((one) => one.id)]).toEqual([200, [WINDOW_INSIDE]])
   })
 })
 

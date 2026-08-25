@@ -144,7 +144,10 @@ for, reintroduced from the other side.
 `menu_item` carry none, and the menu queries still scope themselves. That is its
 own roadmap row: bringing them under one means the code lookup and the menu read
 become two statements in a transaction, which is a change to the menu slice rather
-than to this one.
+than to this one. The claim is about those three tables only. The policies added
+here are `for all`, so they cover a select as well, and
+[ADR 0026](0026-read-a-tables-open-orders-by-its-printed-code.md) reads an order
+back under them without adding a migration.
 
 **ADR 0015's trigger has not fired**, and this was run rather than reasoned.
 Re-applying `0003` to a schema that already has it prints

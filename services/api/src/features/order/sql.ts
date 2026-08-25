@@ -85,3 +85,60 @@ export const ADD_LINES = `
 
 /** `foreign_key_violation`. On this transaction it has exactly one cause; see {@link ADD_LINES}. */
 export const FOREIGN_KEY_VIOLATION = '23503'
+
+/**
+ * How much of a table's history its printed code reaches.
+ *
+ * The code is printed in a public room and cannot be revoked, so a read that
+ * carried the whole history would let anyone who ever photographed the placard
+ * learn what that table has eaten since. A window bounds that to a meal in
+ * progress. It cannot separate one party from the party before it -- a table can
+ * turn over in five minutes, and no window is shorter than that -- so it is a
+ * proxy for the sitting rather than a substitute for one, and it retires when a
+ * sitting exists. ADR 0026.
+ */
+export const OPEN_WINDOW = '2 hours'
+
+/**
+ * A table's open orders, with the lines on each.
+ *
+ * Nothing here names a restaurant. That is the point: `table_order` and
+ * `table_order_line` carry policies whose `using` clause is this read's scope,
+ * set on the transaction from the row the printed code resolved to, so a
+ * predicate here would be the statement taking back a job the policy now has.
+ * `menu_item` carries no policy, so its join scopes itself -- against
+ * `line.restaurant_id`, which the policy has already filtered, and not against
+ * anything the caller sent.
+ *
+ * The joins are LEFT JOINs for the reason the menu slice's `MENU_FOR_RESTAURANT`
+ * gives: an order carrying no line comes back as one row with null line columns, which is
+ * an order with nothing on it rather than an order that vanished. An inner join
+ * cannot tell those apart.
+ *
+ * The sort is by `placed_at` before `id` because two sends can share a
+ * transaction start time, and by `id` rather than nothing so that a tie is
+ * broken the same way twice. Within an order the lines follow the restaurant's
+ * own menu order, which is the order the guest chose them in.
+ */
+export const OPEN_ORDERS_AT_TABLE = `
+  select
+    o.id as order_id,
+    line.quantity,
+    item.name as item_name
+  from table_order o
+  left join table_order_line line
+    on line.order_id = o.id
+  left join menu_item item
+    on item.id = line.menu_item_id
+   and item.restaurant_id = line.restaurant_id
+  where o.table_id = $1
+    and o.placed_at > now() - $2::interval
+  order by o.placed_at, o.id, item.sort_order, item.name
+`
+
+/** One row of {@link OPEN_ORDERS_AT_TABLE}. The line columns are null for an order with no lines. */
+export type OpenOrderRow = {
+  order_id: string
+  quantity: number | null
+  item_name: string | null
+}

@@ -114,3 +114,9 @@ produced. Nothing compares the lines.
 **An order has no reader.** Nothing in the repository selects one except the
 conditions that assert it was written. That is the state the kitchen board arrives
 into, and it is why the response carries the order's id and nothing else.
+
+An order has one from
+[ADR 0026](0026-read-a-tables-open-orders-by-its-printed-code.md), which reads a
+table's own orders back by the code printed on it. That record bounds the read
+in time, and its window is a proxy for the sitting rejected above — so that
+alternative's trigger now has a second reason as well as a second reader.

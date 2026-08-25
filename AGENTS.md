@@ -29,8 +29,11 @@ that creates the thing it governs.
   4217 code. Never a float, never a decimal string, in the schema or on the
   wire.
 - A restaurant's rows are read only through a query scoped to that restaurant.
-  Row-level security is not on the read path, so on a read the scope is the
-  query's job.
+  `restaurant`, `restaurant_table` and `menu_item` carry no policy, so on a read
+  of those the scope is the query's job.
+- An order is read under the policy it is written under, on a transaction scoped
+  from the row a printed code resolved to. A read that establishes no scope is
+  refused, never answered with nothing.
 - A write is scoped by a policy, not by the statement. The scope is set once on
   the transaction, from the row a printed code resolved to, and a statement that
   runs without it is refused rather than silently widened or narrowed.
