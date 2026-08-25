@@ -562,6 +562,8 @@ each with the alternatives that were rejected and why.
 - [0024 Report what each test file cost, and assert nothing about it](docs/adr/0024-report-what-each-test-file-cost.md)
 - [0025 Check the subject clauses a program can decide, and say which one it cannot](docs/adr/0025-make-the-subject-clauses-executable.md)
 - [0026 Read a table's open orders by its printed code, and defer the board to a staff identity](docs/adr/0026-read-a-tables-open-orders-by-its-printed-code.md)
+- [0027 Show the table's orders on the guest's page, refreshed only by a send](docs/adr/0027-show-the-tables-orders-on-the-guests-page.md)
+- [0028 Check the window where it is restated, and leave the records alone](docs/adr/0028-check-the-window-where-it-is-restated.md)
 
 ## Known limitations
 
@@ -603,9 +605,15 @@ each with the alternatives that were rejected and why.
   reloaded, and nothing on the page says how old the list is.
 - The empty list means nothing in the last two hours, not nothing ever, and the
   page says so in those words. That sentence restates a value the server owns —
-  `OPEN_WINDOW` — in a workspace that cannot import it, and no check holds the
-  two together: a window changed on the server leaves the page saying something
-  untrue.
+  `OPEN_WINDOW` — in a workspace that cannot import it, and a convention rule is
+  what holds the two together: it reads the constant and fails every sentence in
+  this file and on that page that names a different window
+  ([ADR 0028](docs/adr/0028-check-the-window-where-it-is-restated.md)).
+- That rule reads this file and the guest page, and nothing else. A window
+  restated somewhere new is invisible to it, and so is one written as a number
+  word it does not carry. The records in `docs/adr/` are outside it on purpose:
+  each states what was decided on its date, and a decision that moves is
+  superseded rather than rewritten.
 - Row-level security covers an order and its lines, written and read.
   `restaurant`, `restaurant_table` and `menu_item` carry no policy, so on a read
   of those the scope is still the query's job, exactly as it was.
@@ -727,7 +735,7 @@ each with the alternatives that were rejected and why.
   input that produced the divergence in
   [ADR 0022](docs/adr/0022-take-a-checks-inputs-from-the-repository.md), not
   every way a check could learn something about its operator.
-- The convention checker carries six rules. The rest arrive with the code they
+- The convention checker carries seven rules. The rest arrive with the code they
   govern, so that each rule shows up to a set of subjects that already comply.
 - `compose.yaml` carries development credentials inline, and starts a Redis
   that nothing connects to.

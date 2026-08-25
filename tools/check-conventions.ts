@@ -82,6 +82,15 @@ export type RunStepCommand = {
   text: string
 }
 
+export type WindowMention = {
+  /** Repository-relative path of the file carrying it. */
+  path: string
+  /** 1-based line where the mention begins, which is the line a reader has to edit. */
+  line: number
+  /** The mention, with a soft line wrap already joined into one line. */
+  text: string
+}
+
 export type ConventionInput = {
   /** Contents of README.md, or null when there is no README.md. */
   readme: string | null
@@ -137,6 +146,21 @@ export type ConventionInput = {
    * would both invent violations and miss them.
    */
   runStepCommands: RunStepCommand[]
+  /**
+   * The interval `OPEN_WINDOW` declares, verbatim, or null when the declaration
+   * is not there to read. The text arrives rather than a parsed pair because
+   * "the constant is missing" and "the constant says something this cannot read"
+   * are different answers, and a violation quotes the second back.
+   */
+  openWindow: string | null
+  /**
+   * Every duration in the documents that describe the system as it stands, in
+   * path then file order. A restatement of the window and a duration that is
+   * something else are indistinguishable here on purpose: the rule is what
+   * compares them with the value, and a collector that filtered by the current
+   * value would stop seeing a sentence at the moment it went wrong.
+   */
+  windowMentions: WindowMention[]
   /** Treat "no history to evaluate" as a failure rather than a skip. */
   requireHistory: boolean
 }
@@ -389,6 +413,143 @@ export function runStepSingleTransactionRule(input: ConventionInput): Rule {
   }
 }
 
+/**
+ * The file that owns the window, named once so the rule and the collector agree
+ * on where a reader has to go.
+ */
+const WINDOW_SOURCE = 'services/api/src/features/order/sql.ts'
+
+/**
+ * The numbers English writes as words.
+ *
+ * Wider than the one word the tree uses, and the width is the point. This table
+ * has to recognise a *wrong* window as well as the right one: a sentence edited
+ * from two hours to three hours must arrive here as a subject that disagrees,
+ * not as a subject that disappeared, and a table holding only the word in use
+ * would let the second happen silently. What it has to reach is therefore the
+ * numbers English writes as words, not the windows this project might pick.
+ *
+ * It only ever grows. An entry is what lets the rule read the sentence a moved
+ * value left behind, and that sentence is written in the word the value used
+ * before it moved.
+ *
+ * A number outside it is invisible rather than wrong, which is this rule's limit
+ * and is recorded in ADR 0028 rather than hidden. What narrows the limit is the
+ * check below that the window's own number has a word here.
+ */
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  fifteen: 15,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  'forty-five': 45,
+  sixty: 60,
+  ninety: 90,
+}
+
+type Duration = { count: number; unit: 'hour' | 'minute' }
+
+/**
+ * A number, then the unit. One reader for the value and for its restatements,
+ * because they are the same shape written two ways: `2 hours` and `two-hour`
+ * both land here.
+ */
+const DURATION = /^([A-Za-z]+(?:-[A-Za-z]+)?|\d+)[\s-]+(hour|minute)s?$/i
+
+function readDuration(said: string | null): Duration | null {
+  if (said === null) return null
+  const match = DURATION.exec(said.trim())
+  if (match === null) return null
+
+  const token = (match[1] ?? '').toLowerCase()
+  const count = /^\d+$/.test(token) ? Number(token) : NUMBER_WORDS[token]
+  if (count === undefined) return null
+
+  return { count, unit: (match[2] ?? '').toLowerCase() as Duration['unit'] }
+}
+
+/**
+ * A window a guest reads and the server owns says the same thing in both places.
+ *
+ * `OPEN_WINDOW` lives in one file and is restated in prose that `apps/guest` and
+ * `README.md` carry, and `apps/guest` cannot import `services/api`. Nothing else
+ * holds those copies together: a window moved on the server leaves a page telling
+ * a guest something untrue, and until this rule there was nothing to go red.
+ *
+ * It reads the documents that describe the system as it stands, and nothing in
+ * `docs/adr/`. A record's window is a capture -- true of that decision on its
+ * date -- and it stays valid afterwards for the reason every other capture here
+ * does. A rule that could only go green by rewriting a record is a rule that gets
+ * bypassed, and superseding is what a decision that moves gets instead. ADR 0028.
+ *
+ * The order below is not cosmetic. A window that cannot be read is reported
+ * first and then every mention is named beside it, because in that state no
+ * mention has been compared with anything, and reporting them as agreeing would
+ * be the rule passing over prose it never checked.
+ */
+export function openWindowRestatedRule(input: ConventionInput): Rule {
+  return {
+    name: 'open-window-restated',
+    expectsSubjects: true,
+    check(): Outcome {
+      const violations: Violation[] = []
+      const window = readDuration(input.openWindow)
+
+      if (window === null) {
+        violations.push({
+          where: WINDOW_SOURCE,
+          detail:
+            input.openWindow === null
+              ? 'no OPEN_WINDOW to read'
+              : `OPEN_WINDOW is not one duration: ${input.openWindow}`,
+        })
+      } else if (!Object.values(NUMBER_WORDS).includes(window.count)) {
+        // Never fires while the window is two hours. It is what keeps the table
+        // above complete as values move, in the way ADR 0004 defends for
+        // `expectsSubjects`: the guard is not inert because it has not fired.
+        violations.push({
+          where: WINDOW_SOURCE,
+          detail: `OPEN_WINDOW is ${input.openWindow} and no word is recorded for ${window.count}`,
+        })
+      }
+
+      for (const mention of input.windowMentions) {
+        const where = `${mention.path} line ${mention.line}`
+        if (window === null) {
+          violations.push({
+            where,
+            detail: `restates the window as ${mention.text}, and there is nothing to compare it with`,
+          })
+          continue
+        }
+
+        const said = readDuration(mention.text)
+        if (said?.count === window.count && said.unit === window.unit) continue
+        violations.push({
+          where,
+          detail: `says ${mention.text}, OPEN_WINDOW says ${input.openWindow}`,
+        })
+      }
+
+      const subjects = input.windowMentions.length
+      if (violations.length > 0) return { status: 'fail', subjects, violations }
+      return { status: 'pass', subjects }
+    },
+  }
+}
+
 export function createRules(input: ConventionInput): Rule[] {
   return [
     readmeStatusDateRule(input),
@@ -397,6 +558,7 @@ export function createRules(input: ConventionInput): Rule[] {
     featureHasTestRule(input),
     workflowJobTimeoutRule(input),
     runStepSingleTransactionRule(input),
+    openWindowRestatedRule(input),
   ]
 }
 
@@ -735,6 +897,79 @@ function readRunStepCommands(readme: string | null): RunStepCommand[] {
   return commands.filter((command) => PSQL.test(command.text))
 }
 
+/**
+ * The declaration, read as text rather than by importing the module.
+ *
+ * An import would put the API package's module graph inside a checker that runs
+ * before anything is built, for one string. This is the posture `readWorkflowJobs`
+ * already takes towards YAML and `readFileReport` towards junit, and the failure
+ * mode is the same one that makes it acceptable: a declaration written in a shape
+ * this cannot read yields null, which the rule reports as a violation naming the
+ * file, rather than as a window that agrees with everything.
+ */
+const WINDOW_DECLARATION = /^export const OPEN_WINDOW = '([^']*)'$/m
+
+/**
+ * The documents that describe the system as it stands.
+ *
+ * Two paths, not a directory. `services/api/src/features/order/sql.ts` carries
+ * `five minutes` in the paragraph above the value, and the order suite carries
+ * `10 minutes`, `5 minutes`, `100 minutes` and `3 hours` as fixture ages -- real
+ * durations that are not the window, which a selector aimed at a directory would
+ * report. A restatement outside these two is invisible, which ADR 0028 records as
+ * this rule's limit rather than hiding.
+ */
+const RESTATING_PATHS = ['README.md', 'apps/guest/src/features/order/placed.tsx'] as const
+
+/**
+ * A duration in prose: a number, then the unit.
+ *
+ * Matched against the whole file with its newlines still in it, so that a phrase
+ * a soft wrap has split is still one phrase. README.md carries exactly that today
+ * -- `two` ends one line and `hours` begins the next -- and a line-based reader
+ * finds six of the seven mentions and reports a number that looks right. It is
+ * the same failure `readRunStepCommands` joins continuations to avoid.
+ *
+ * The leading token is required because `parties can be minutes apart` is not a
+ * duration, and a rule that reported it would be legislating the prose rather
+ * than checking a value.
+ */
+const DURATION_IN_PROSE = /\b([A-Za-z]+(?:-[A-Za-z]+)?|\d+)[\s-]+(hour|minute)s?\b/g
+
+function readWindow(root: string): string | null {
+  let text: string
+  try {
+    text = readFileSync(join(root, WINDOW_SOURCE), 'utf8')
+  } catch {
+    return null
+  }
+  return WINDOW_DECLARATION.exec(text)?.[1] ?? null
+}
+
+function readWindowMentions(root: string): WindowMention[] {
+  const mentions: WindowMention[] = []
+
+  for (const path of RESTATING_PATHS) {
+    let text: string
+    try {
+      text = readFileSync(join(root, path), 'utf8')
+    } catch {
+      continue
+    }
+
+    for (const match of text.matchAll(DURATION_IN_PROSE)) {
+      // A wrap inside the phrase is joined here, so that what the rule compares
+      // and what a violation quotes are the sentence rather than the line.
+      const said = match[0].replace(/\s+/g, ' ')
+      if (readDuration(said) === null) continue
+      const line = text.slice(0, match.index).split('\n').length
+      mentions.push({ path, line, text: said })
+    }
+  }
+
+  return mentions
+}
+
 export function collectInput(root: string, requireHistory: boolean): ConventionInput {
   let readme: string | null
   try {
@@ -783,6 +1018,8 @@ export function collectInput(root: string, requireHistory: boolean): ConventionI
     features: readFeatures(root),
     workflowJobs: readWorkflowJobs(root),
     runStepCommands: readRunStepCommands(readme),
+    openWindow: readWindow(root),
+    windowMentions: readWindowMentions(root),
     requireHistory,
   }
 }

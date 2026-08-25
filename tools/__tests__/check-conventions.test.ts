@@ -9,7 +9,7 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import {
   type Commit,
@@ -21,11 +21,13 @@ import {
   formatReports,
   hasFailure,
   migrationHasDownRule,
+  openWindowRestatedRule,
   type Rule,
   type RunStepCommand,
   readmeStatusDateRule,
   runRules,
   runStepSingleTransactionRule,
+  type WindowMention,
   workflowJobTimeoutRule,
 } from '../check-conventions.ts'
 
@@ -63,6 +65,8 @@ function input(overrides: Partial<ConventionInput> = {}): ConventionInput {
     ],
     workflowJobs: [{ path: '.github/workflows/ci.yml', job: 'verify', timeoutMinutes: 10 }],
     runStepCommands: [{ line: 12, text: 'psql -U u -d d --single-transaction < 0001.up.sql' }],
+    openWindow: '2 hours',
+    windowMentions: [{ path: 'README.md', line: 113, text: 'two hours' }],
     requireHistory: false,
     ...overrides,
   }
@@ -247,20 +251,20 @@ describe('the report', () => {
   // so they are null together or not at all, and an unborn repository's README
   // is untracked rather than modified. The file rules read the working tree, so
   // they evaluate before the first commit.
-  it('summarises a repository with no commits as two skips and four passes', () => {
+  it('summarises a repository with no commits as two skips and five passes', () => {
     const reports = runRules(
       createRules(input({ commits: null, readmeCommitDates: null, readmeDirty: false })),
     )
     const text = formatReports(reports)
-    expect(text).toContain('6 checks: 4 PASS, 0 FAIL, 2 SKIP')
+    expect(text).toContain('7 checks: 5 PASS, 0 FAIL, 2 SKIP')
     expect(text).toContain('readme-status-date')
     expect(text).toContain('commit-message-policy')
     expect(hasFailure(reports)).toBe(false)
   })
 
-  it('summarises a clean committed tree as six passes', () => {
+  it('summarises a clean committed tree as seven passes', () => {
     const reports = runRules(createRules(input({ requireHistory: true })))
-    expect(formatReports(reports)).toContain('6 checks: 6 PASS, 0 FAIL, 0 SKIP')
+    expect(formatReports(reports)).toContain('7 checks: 7 PASS, 0 FAIL, 0 SKIP')
     expect(hasFailure(reports)).toBe(false)
   })
 
@@ -275,7 +279,7 @@ describe('the report', () => {
     }
   })
 
-  it('ships exactly the six rules', () => {
+  it('ships exactly the seven rules', () => {
     expect(createRules(input()).map((rule) => rule.name)).toEqual([
       'readme-status-date',
       'commit-message-policy',
@@ -283,6 +287,7 @@ describe('the report', () => {
       'feature-has-test',
       'workflow-job-timeout',
       'run-step-single-transaction',
+      'open-window-restated',
     ])
   })
 })
@@ -580,14 +585,24 @@ describe('collectInput', () => {
  * step or that rule fails as vacuous and the verdict arrays below stop being
  * about history at all.
  */
+/**
+ * The window rule reads this file and the guest page, so the README a fixture
+ * repository carries needs a real restatement of the window and the constant
+ * needs to exist beside it. Without both, that rule fails as vacuous and the
+ * verdict arrays below stop being about history at all.
+ */
 const BOOTSTRAP_README = `# Title
 
 **Status:** 2026-08-19 · x.
+
+The orders placed at that table in the last two hours.
 
 \`\`\`sh
 psql -U u -d d --single-transaction < 0001.up.sql
 \`\`\`
 `
+
+const BOOTSTRAP_SQL = "export const OPEN_WINDOW = '2 hours'\n"
 
 describe('an unborn repository whose README.md is untracked', () => {
   /** A fresh clone before its first commit: files on disk, nothing in history. */
@@ -599,6 +614,11 @@ describe('an unborn repository whose README.md is untracked', () => {
     writeFileSync(join(dir, 'services', 'api', 'migrations', '1.down.sql'), 'drop table x;\n')
     mkdirSync(join(dir, 'services', 'api', 'src', 'features', 'menu'), { recursive: true })
     writeFileSync(join(dir, 'services', 'api', 'src', 'features', 'menu', 'menu.test.ts'), '')
+    mkdirSync(join(dir, 'services', 'api', 'src', 'features', 'order'), { recursive: true })
+    writeFileSync(join(dir, 'services', 'api', 'src', 'features', 'order', 'sql.ts'), BOOTSTRAP_SQL)
+    // A slice is a slice to `feature-has-test` too, so the directory the window
+    // lives in arrives with the file that rule looks for.
+    writeFileSync(join(dir, 'services', 'api', 'src', 'features', 'order', 'order.test.ts'), '')
     mkdirSync(join(dir, '.github', 'workflows'), { recursive: true })
     writeFileSync(join(dir, '.github', 'workflows', 'ci.yml'), WORKFLOW_WITH_BOUND, 'utf8')
     return dir
@@ -619,6 +639,7 @@ describe('an unborn repository whose README.md is untracked', () => {
       'PASS',
       'PASS',
       'PASS',
+      'PASS',
     ])
     const readme = reports[0]?.outcome
     expect(readme?.status).toBe('skip')
@@ -632,6 +653,7 @@ describe('an unborn repository whose README.md is untracked', () => {
     expect(reports.map((report) => report.verdict)).toEqual([
       'FAIL',
       'FAIL',
+      'PASS',
       'PASS',
       'PASS',
       'PASS',
@@ -1071,5 +1093,174 @@ jobs:
     const report = runRules([workflowJobTimeoutRule(collected)])[0]
     expect(report?.verdict).toBe('FAIL')
     expect(report?.vacuous).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('open-window-restated', () => {
+  const PAGE = 'apps/guest/src/features/order/placed.tsx'
+  const SOURCE = 'services/api/src/features/order/sql.ts'
+
+  /** The seven the tree carries, on the lines it carries them on. */
+  const RESTATED: WindowMention[] = [
+    { path: 'README.md', line: 113, text: 'two hours' },
+    { path: 'README.md', line: 119, text: 'Two hours' },
+    { path: 'README.md', line: 409, text: 'two hours' },
+    { path: 'README.md', line: 580, text: 'two hours' },
+    { path: 'README.md', line: 592, text: 'two-hour' },
+    { path: 'README.md', line: 604, text: 'two hours' },
+    { path: PAGE, line: 56, text: 'two hours' },
+  ]
+
+  function withWindow(openWindow: string | null, windowMentions = RESTATED): Rule {
+    return openWindowRestatedRule(input({ openWindow, windowMentions }))
+  }
+
+  it('passes a restatement that says what the window says', () => {
+    expect(verdictOf(withWindow('2 hours'))).toBe('PASS')
+  })
+
+  // The condition this rule exists for, and the sites are named rather than
+  // counted: a reader who moved the value already knows how many there were,
+  // and what they do not have is the list of lines to go and edit.
+  it('fails every restatement when the window moves, and names each', () => {
+    const outcome = withWindow('90 minutes').check()
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+
+    expect(outcome.subjects).toBe(7)
+    expect(outcome.violations.map((violation) => violation.where)).toEqual([
+      'README.md line 113',
+      'README.md line 119',
+      'README.md line 409',
+      'README.md line 580',
+      'README.md line 592',
+      'README.md line 604',
+      `${PAGE} line 56`,
+    ])
+    expect(outcome.violations[0]?.detail).toBe('says two hours, OPEN_WINDOW says 90 minutes')
+  })
+
+  it('names only the restatement that disagrees, when the others match', () => {
+    const outcome = withWindow('2 hours', [
+      { path: 'README.md', line: 113, text: 'two hours' },
+      { path: 'README.md', line: 409, text: 'three hours' },
+      { path: PAGE, line: 56, text: 'two hours' },
+    ]).check()
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+
+    expect(outcome.subjects).toBe(3)
+    expect(outcome.violations).toEqual([
+      { where: 'README.md line 409', detail: 'says three hours, OPEN_WINDOW says 2 hours' },
+    ])
+  })
+
+  // A window it cannot read is not a window every sentence agrees with. Each
+  // restatement is named beside it, because none of them has been compared with
+  // anything, and passing them would be the rule vouching for prose it never
+  // checked.
+  it('fails when OPEN_WINDOW is not one duration, and vouches for no restatement', () => {
+    const outcome = withWindow('2 hours 30 minutes').check()
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+
+    expect(outcome.violations).toHaveLength(8)
+    expect(outcome.violations[0]).toEqual({
+      where: SOURCE,
+      detail: 'OPEN_WINDOW is not one duration: 2 hours 30 minutes',
+    })
+    expect(outcome.violations[1]).toEqual({
+      where: 'README.md line 113',
+      detail: 'restates the window as two hours, and there is nothing to compare it with',
+    })
+  })
+
+  it('fails when there is no OPEN_WINDOW to read at all', () => {
+    const outcome = withWindow(null).check()
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+
+    expect(outcome.violations).toHaveLength(8)
+    expect(outcome.violations[0]).toEqual({ where: SOURCE, detail: 'no OPEN_WINDOW to read' })
+  })
+
+  // The branch that keeps the vocabulary complete as values move. It is what
+  // stops a window nothing can spell from leaving a wrong sentence unreadable,
+  // and so unreported, at the next move.
+  it('fails when it carries no word for the window own number', () => {
+    const outcome = withWindow('75 minutes').check()
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+
+    expect(outcome.violations[0]).toEqual({
+      where: SOURCE,
+      detail: 'OPEN_WINDOW is 75 minutes and no word is recorded for 75',
+    })
+  })
+
+  it('fails as vacuous when nothing restates the window at all', () => {
+    const report = runRules([withWindow('2 hours', [])])[0]
+    expect(report?.verdict).toBe('FAIL')
+    expect(report?.vacuous).toBe(true)
+  })
+})
+
+describe('the window a repository restates', () => {
+  const SQL = 'services/api/src/features/order/sql.ts'
+  const PAGE = 'apps/guest/src/features/order/placed.tsx'
+
+  function repoWith(files: Record<string, string>): ConventionInput {
+    const dir = newRepo()
+    for (const [path, body] of Object.entries(files)) {
+      const full = join(dir, ...path.split('/'))
+      mkdirSync(dirname(full), { recursive: true })
+      writeFileSync(full, body, 'utf8')
+    }
+    return collectInput(dir, false)
+  }
+
+  it('reads the window the constant declares', () => {
+    expect(repoWith({ [SQL]: "export const OPEN_WINDOW = '2 hours'\n" }).openWindow).toBe('2 hours')
+  })
+
+  it('reads no window when the declaration is not there', () => {
+    expect(repoWith({ [SQL]: 'export const OTHER = 1\n' }).openWindow).toBeNull()
+    expect(repoWith({}).openWindow).toBeNull()
+  })
+
+  // README.md carries exactly this shape: `two` ends one line and `hours`
+  // begins the next. A reader taking a line at a time finds six of the seven
+  // restatements and reports a subject count that looks entirely reasonable.
+  it('reads a restatement a soft line wrap has split across two lines', () => {
+    const collected = repoWith({
+      'README.md':
+        '# Title\n\nAnyone holding the code can read what that table ordered in the last two\nhours. The code is printed in a public room.\n',
+    })
+    expect(collected.windowMentions).toEqual([{ path: 'README.md', line: 3, text: 'two hours' }])
+  })
+
+  it('does not read a duration noun with no number in front of it', () => {
+    const collected = repoWith({
+      'README.md': 'No window closes that, because parties can be minutes apart.\n',
+    })
+    expect(collected.windowMentions).toEqual([])
+  })
+
+  it('reads a digit form as well as a word form', () => {
+    const collected = repoWith({ 'README.md': 'Bounded to 2 hours, and to one table.\n' })
+    expect(collected.windowMentions).toEqual([{ path: 'README.md', line: 1, text: '2 hours' }])
+  })
+
+  it('reads both documents, each mention at the line it begins on', () => {
+    const collected = repoWith({
+      'README.md': '# Title\n\nThe orders placed in the last two hours.\n',
+      [PAGE]: "const A = 1\nexport const NOTHING = 'Nothing in the last two hours.'\n",
+    })
+    expect(collected.windowMentions).toEqual([
+      { path: 'README.md', line: 3, text: 'two hours' },
+      { path: PAGE, line: 2, text: 'two hours' },
+    ])
   })
 })

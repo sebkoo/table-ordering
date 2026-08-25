@@ -170,3 +170,10 @@ checked. Recorded above rather than left to be found.
 first view of a stored order and it shows no money and closes no table; both
 records keep their scheduling, and the invariant that a view prices nothing from
 today's menu is now written down where the next view will meet it.
+
+The check this record deferred is
+[ADR 0028](0028-check-the-window-where-it-is-restated.md), which reads the
+constant and fails every restatement of it in README and on the page. It is
+narrower than the sentence above: the records are outside it, because a window
+written into a decision is a capture of that decision rather than a copy of the
+value.

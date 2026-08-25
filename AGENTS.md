@@ -95,6 +95,10 @@ that creates the thing it governs.
 - A view shows a price only from a price the response carried. Nothing joins a
   stored order to the current menu to price it: an order records no price, and
   the menu's price today is the wrong number for an order placed before it moved.
+- A value the server owns and a guest reads is restated only where a check
+  compares the restatement with the value. `docs/adr/` is outside that: a record
+  states what was decided on its date, and a decision that moves is superseded
+  rather than rewritten.
 
 ## Change size
 
