@@ -50,6 +50,7 @@ const MIGRATION_FILES = [
   '0004-create-staff.up.sql',
   '0005-scope-the-menu-read.up.sql',
   '0006-record-an-order-served.up.sql',
+  '0007-record-an-order-paid.up.sql',
 ]
 
 function migration(name: string): string {
@@ -743,12 +744,13 @@ describe('the policy the application writes under', () => {
   // would need UPDATE; this is what stops that being restored by widening a
   // grant instead of by changing the statement.
   //
-  // "Move or remove" rather than "alter", since `0006`: the role now holds
-  // `update (served_at)` and nothing else, so an order can be recorded as served
-  // and still cannot be moved to another table, re-timed or deleted. That the
-  // grant reaches exactly one column is pinned in the staff slice, beside the
-  // route that uses it; what this condition holds is the rest of the boundary,
-  // and a grant widened to the whole table reddens both.
+  // "Move or remove" rather than "alter", since `0006` and now `0007`: the role
+  // holds `update (served_at)` and `update (paid_at)` and nothing else, so an
+  // order can be recorded as served and as paid for and still cannot be moved to
+  // another table, re-timed or deleted. That each grant reaches exactly one
+  // column is pinned in the staff slice, beside the routes that use them; what
+  // this condition holds is the rest of the boundary, and a grant widened to the
+  // whole table reddens all three.
   it('gives the application role no way to move or remove an order', async () => {
     const update = await sqlstate(() =>
       scoped(app, BLUE, (client) => client.query('update table_order set placed_at = now()')),
@@ -769,6 +771,7 @@ describe('the down migration', () => {
   // actually makes.
   const DOWN_SCHEMA = `order_down_test_${process.pid}`
   const DOWN_FILES = [
+    '0007-record-an-order-paid.down.sql',
     '0006-record-an-order-served.down.sql',
     '0005-scope-the-menu-read.down.sql',
     '0004-create-staff.down.sql',

@@ -1,0 +1,46 @@
+-- The moment a round was paid for, and the second column the application may set.
+--
+-- The roadmap's last row is "Payment, as an option rather than a requirement",
+-- and this is the honest half of it. A hosted processor would turn a
+-- self-hosted system's front door into a third party's, which is the one thing
+-- the product's own description forbids -- "No app to install, no third-party
+-- requests" -- so what lands is the fact and not the transaction. ADR 0036.
+--
+-- A MOMENT, NOT A LEDGER. `paid_at` is null until somebody records one and
+-- carries the time afterwards. No amount and no currency: an amount is a
+-- ledger, a ledger needs a price on the order, and ADR 0021 put a price
+-- snapshot behind "the first thing that shows an order's money". A paid moment
+-- shows none, so it does not fire that trigger.
+--
+-- PER ROUND, NOT PER SITTING. A restaurant settles a bill across a sitting, and
+-- there is no sitting row -- ADR 0021 deferred it to "the first view that can
+-- close a table" and this is not one. What this records is the finest grain the
+-- schema has, from which a bill reconstructs exactly as ADR 0021 argued a
+-- sitting reconstructs from a table and a time. The bill-level act arrives with
+-- the sitting.
+--
+-- NO POLICY WORK, for `0006`'s reason. `0003` put `table_order` under
+-- `table_order_scope`, which is `for all`: this update moves no `restaurant_id`,
+-- so a row satisfying its `using` clause satisfies its `with check` clause. The
+-- policy that scopes the board's read already scopes this write.
+--
+-- THE SECOND COLUMN-SCOPED GRANT. The role now holds `update` on `served_at`
+-- and on `paid_at` and on nothing else, so a statement setting `restaurant_id`,
+-- `table_id`, `submission_id` or `placed_at` is still refused with 42501 by the
+-- privilege rather than by review. What is narrower than it was at `0006` is
+-- the isolation *between the two acts*: the privilege no longer distinguishes
+-- them, and what keeps each to its own column is now its statement. ADR 0034's
+-- consequence is amended rather than repeated.
+--
+-- NOTHING GATES ON IT, which is the row's own word "option". No read consults
+-- this column: the board still shows what is unserved, and the guest's answer
+-- does not carry it. A restaurant that never records payment behaves exactly as
+-- it did before this migration, and that is pinned by a condition rather than
+-- promised here.
+--
+-- NO INDEX, for `0006`'s reason: nothing is deployed, so no plan has been
+-- measured, and no read filters on this column at all.
+
+alter table table_order add column paid_at timestamptz;
+
+grant update (paid_at) on table_order to table_ordering_app;

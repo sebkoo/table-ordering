@@ -46,7 +46,7 @@ import { Pool } from 'pg'
 import { type Browser, type BrowserContext, chromium, type Page } from 'playwright'
 import { build, type PreviewServer, preview } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { NOT_ACTED, NOTHING_OPEN } from './board.tsx'
+import { NOT_ACTED, NOT_RECORDED, NOTHING_OPEN } from './board.tsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(here, '..', '..', '..', '..', '..')
@@ -60,6 +60,7 @@ const MIGRATIONS = [
   '0004-create-staff.up.sql',
   '0005-scope-the-menu-read.up.sql',
   '0006-record-an-order-served.up.sql',
+  '0007-record-an-order-paid.up.sql',
 ].map((name) => join(ROOT, 'services', 'api', 'migrations', name))
 
 /** The credentials and published port in `compose.yaml`. This role owns the tables and seeds them. */
@@ -129,7 +130,14 @@ let minted = 0
 
 function mintCode(): string {
   minted += 1
-  return `${process.pid.toString(16)}${minted.toString(16)}`.padEnd(12, '0').slice(0, 12)
+  // The counter is padded to a fixed width before the whole thing is padded to
+  // twelve. Without that, `1` and `10` both become `<pid>1` followed by zeros --
+  // the first code and the sixteenth collide on `restaurant_table_code_key`, and
+  // the suite fails in its fixture rather than in a condition. Four hex digits is
+  // more tables than any suite here seeds.
+  return `${process.pid.toString(16)}${minted.toString(16).padStart(4, '0')}`
+    .padEnd(12, '0')
+    .slice(0, 12)
 }
 
 /**
@@ -213,6 +221,8 @@ let held: Seeded // the leak search
 let cleared: Seeded // two open orders, one of them cleared through the control
 let stuck: Seeded // the act that never left the page
 let ended: Seeded // the session refused at the act rather than at the read
+let settled: Seeded // two open orders, one of them recorded paid through the control
+let unpaid: Seeded // the payment that never left the page
 
 // ---------------------------------------------------------------------------
 // Starting the API, the mint, and the page
@@ -301,6 +311,8 @@ beforeAll(async () => {
   cleared = await seed('ivy-court', 'Ida', ['Table 10', 'Table 11'], 2)
   stuck = await seed('opal-lane', 'Jo', ['Table 12'], 1)
   ended = await seed('rust-mill', 'Kit', ['Table 13'], 1)
+  settled = await seed('pearl-way', 'Lou', ['Table 14', 'Table 15'], 2)
+  unpaid = await seed('slate-row', 'Moe', ['Table 16'], 1)
 
   // Spawned rather than imported: `apps/staff` does not depend on
   // `services/api`, and a test is not a reason to open that boundary.
@@ -471,8 +483,13 @@ function boardReads(requested: readonly string[]): number {
   return requested.filter((url) => new URL(url).pathname === '/staff/orders').length
 }
 
-/** The act's address, which carries an id this file does not hold, so it is matched by shape. */
-const ACTED = /^\/staff\/orders\/[^/]+\/served$/
+/** An act's address, which carries an id this file does not hold, so it is matched by shape. */
+function actAddress(what: Act): RegExp {
+  return new RegExp(`^/staff/orders/[^/]+/${what}$`)
+}
+
+/** The two things a control on a row does. The page's own two addresses. */
+type Act = 'served' | 'paid'
 
 /**
  * Use the control on the first ticket and let the page finish with it, and
@@ -491,12 +508,17 @@ const ACTED = /^\/staff\/orders\/[^/]+\/served$/
  * the request log rather than assumed: awaiting a request that was never made
  * would spend `SETTLE_MS` on every condition where the act does not land.
  */
-async function clearFirstTicket(page: Page, requested: readonly string[]): Promise<number> {
-  const control = page.locator('[data-board] li button.served')
+async function actOnFirstTicket(
+  page: Page,
+  requested: readonly string[],
+  what: Act = 'served',
+): Promise<number> {
+  const control = page.locator(`[data-board] li button.${what}`)
   const found = await control.count()
   if (found === 0) return 0
 
-  const matches = (url: string): boolean => ACTED.test(new URL(url).pathname)
+  const address = actAddress(what)
+  const matches = (url: string): boolean => address.test(new URL(url).pathname)
   const acted = Promise.race([
     page
       .waitForResponse((response) => matches(response.url()), { timeout: SETTLE_MS })
@@ -515,6 +537,27 @@ async function clearFirstTicket(page: Page, requested: readonly string[]): Promi
   if (boardReads(requested) > before) await reread
   await flushed(page)
   return found
+}
+
+/**
+ * Whether each row says it has been recorded paid, in the sequence they render.
+ *
+ * The attribute is read and compared, never waited for, for the reason every
+ * other reader in this file gives: a wait that expires reports a timeout, and a
+ * timeout is what a dead server produces too.
+ */
+async function paidStates(page: Page): Promise<(string | null)[]> {
+  const rows = page.locator('[data-board] li')
+  const found: (string | null)[] = []
+  for (let index = 0; index < (await rows.count()); index++) {
+    found.push(await rows.nth(index).getAttribute('data-paid'))
+  }
+  return found
+}
+
+/** How many rows still offer the control that records a payment. */
+function paidControls(page: Page): Promise<number> {
+  return page.locator('[data-board] li button.paid').count()
 }
 
 /** As {@link boardState}: null is the absence of the element, never a wait for it. */
@@ -803,7 +846,7 @@ describe('the board a member of staff signs in to', () => {
 
     const before = await tickets(page)
     const readsBefore = boardReads(requested)
-    const controls = await clearFirstTicket(page, requested)
+    const controls = await actOnFirstTicket(page, requested)
 
     expect([
       controls,
@@ -841,7 +884,7 @@ describe('the board a member of staff signs in to', () => {
     await signInAndRead(page, stuck)
 
     const readsBefore = boardReads(requested)
-    const controls = await clearFirstTicket(page, requested)
+    const controls = await actOnFirstTicket(page, requested)
 
     expect([
       controls,
@@ -874,13 +917,105 @@ describe('the board a member of staff signs in to', () => {
       }),
     )
     await signInAndRead(page, ended)
-    const controls = await clearFirstTicket(page, requested)
+    const controls = await actOnFirstTicket(page, requested)
 
     expect([controls, await staffState(page), await boardCount(page), errors]).toEqual([
       1,
       'refused',
       0,
       [],
+    ])
+    await page.close()
+  })
+
+  /**
+   * The second control, and what the board is afterwards.
+   *
+   * Recording a payment clears nothing, so the difference this reads is the
+   * opposite of the one above: both tickets have to *stay*, and the row that was
+   * acted on has to say so. Two of them, so the row that changes is a value the
+   * row beside it can differ from -- a page that marked every row on any act
+   * would pass a one-ticket fixture.
+   *
+   * The control count is read twice for the same reason it is read at all: the
+   * button belongs on a row only while the round is unpaid, so its disappearance
+   * is part of the answer and not a detail of the styling.
+   *
+   * The read count is what tells a re-read from a row this page marked on its
+   * own. Both leave the same thing on screen, and only one of them is the board
+   * agreeing.
+   */
+  it('records a round as paid from the control, and the ticket stays on the board', async () => {
+    const { page, requested } = await open()
+    await signInAndRead(page, settled)
+
+    const before = await tickets(page)
+    const statesBefore = await paidStates(page)
+    const readsBefore = boardReads(requested)
+    const controls = await actOnFirstTicket(page, requested, 'paid')
+
+    expect([
+      controls,
+      await paidControls(page),
+      statesBefore,
+      await paidStates(page),
+      before,
+      await tickets(page),
+      boardReads(requested) - readsBefore,
+      await boardState(page),
+      await actedState(page),
+    ]).toEqual([
+      2,
+      1,
+      ['false', 'false'],
+      ['true', 'false'],
+      [
+        [settled.labels[0] ?? '', `1 × ${settled.item}`],
+        [settled.labels[1] ?? '', `2 × ${settled.item}`],
+      ],
+      [
+        [settled.labels[0] ?? '', `1 × ${settled.item}`],
+        [settled.labels[1] ?? '', `2 × ${settled.item}`],
+      ],
+      1,
+      'ready',
+      'none',
+    ])
+    await page.close()
+  })
+
+  /**
+   * A payment that never left the page.
+   *
+   * The board stays readable and the row stays as it was, for the reason a failed
+   * clearing leaves the kitchen's other tickets alone. The sentence is this act's
+   * own and not the clearing's: "that ticket did not clear" would name an act
+   * nobody made, so the two are separate exports and this reads the second.
+   */
+  it('says a payment that did not land, and leaves the board as it was', async () => {
+    const { page, requested } = await open()
+    await page.route('**/staff/orders/*/paid', (route) => route.abort())
+    await signInAndRead(page, unpaid)
+
+    const readsBefore = boardReads(requested)
+    const controls = await actOnFirstTicket(page, requested, 'paid')
+
+    expect([
+      controls,
+      await boardState(page),
+      await actedState(page),
+      await paidStates(page),
+      await tickets(page),
+      boardReads(requested) - readsBefore,
+      await text(page, '[data-board] .said'),
+    ]).toEqual([
+      1,
+      'ready',
+      'failed',
+      ['false'],
+      [[unpaid.labels[0] ?? '', `1 × ${unpaid.item}`]],
+      0,
+      NOT_RECORDED,
     ])
     await page.close()
   })

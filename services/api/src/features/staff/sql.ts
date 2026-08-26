@@ -136,7 +136,17 @@ export type SessionRow = {
  * `served_at is null` rather than a window on the act: the window bounds what a
  * read discloses, not what a write may record. A ticket that aged off this board
  * unserved can still be cleared, and {@link MARK_SERVED} is deliberately without
- * a window for that reason.
+ * a window for that reason. {@link MARK_PAID} is without both for the same one.
+ *
+ * `paid_at` is read as a boolean and never as a moment. The board shows no times
+ * -- `placed_at`'s only reader is the sort this query has already applied -- and
+ * a moment here would be a second one for a page to decide what to do with. What
+ * a row needs is whether the control to record a payment still belongs on it.
+ *
+ * The predicate does **not** take a paid clause. "Open" is what the kitchen still
+ * has to cook, and a board that kept a ticket until it was settled would turn the
+ * option into a requirement: at a restaurant that never records payment, nothing
+ * would ever leave until the window expired. ADR 0036.
  *
  * `restaurant_table` carries no policy and cannot -- it is what a printed code is
  * resolved through -- so its join scopes itself, against `o.restaurant_id`, which
@@ -156,6 +166,7 @@ export const OPEN_ORDERS_IN_RESTAURANT = `
   select
     o.id as order_id,
     t.label as table_label,
+    o.paid_at is not null as paid,
     line.quantity,
     item.name as item_name
   from table_order o
@@ -176,6 +187,7 @@ export const OPEN_ORDERS_IN_RESTAURANT = `
 export type BoardRow = {
   order_id: string
   table_label: string
+  paid: boolean
   quantity: number | null
   item_name: string | null
 }
@@ -200,10 +212,36 @@ export const MARK_SERVED = `
 `
 
 /**
- * The order an id names, when {@link MARK_SERVED} reached no row.
+ * The second act: the moment a round was paid for, recorded once.
+ *
+ * `and paid_at is null` is what makes a repeat write nothing, for the reason
+ * {@link MARK_SERVED} carries it: without it a second act would move the moment,
+ * which is the difference between "this was settled at 21:10" and "somebody
+ * pressed this at 21:24".
+ *
+ * No restaurant, no window and no `served_at`. The restaurant is the policy's
+ * job, as it is for every statement in this file. The other two are bounds on
+ * what the board *reads*, and a bound on a read does not govern a write: a round
+ * settled at the end of the meal is settled, and by then its ticket left the
+ * board when the kitchen sent it out. ADR 0036.
+ */
+export const MARK_PAID = `
+  update table_order set paid_at = now()
+  where id = $1 and paid_at is null
+  returning id
+`
+
+/**
+ * The order an id names, when {@link MARK_SERVED} or {@link MARK_PAID} reached no
+ * row.
+ *
+ * One statement for both acts, unchanged from the day it was written for the
+ * first. It asks whether this scope can see the row at all, which is the only
+ * question either claim leaves open, and neither act reads the columns it
+ * returns.
  *
  * Two things reach no row, and only this tells them apart: an order already
- * served, which is a repeat, and an order this transaction's scope cannot see,
+ * acted on, which is a repeat, and an order this transaction's scope cannot see,
  * which is another restaurant's or nobody's. It names no restaurant -- the
  * policy is what makes the second of those invisible, and it makes it invisible
  * in exactly the same way for an id that was never minted.

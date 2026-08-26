@@ -187,3 +187,30 @@ The verdict-line count this record predicted moved as predicted, fifteen to
 sixteen, and nothing in the tree restated the old number: `check-push` computes it
 at run time, and the two logs its suite carries are captures read against the step
 list of their own era.
+
+The `closed_at` rejection above predicted its own successor: "a ticket going out
+and a table being cleared are different events and will want different columns."
+[ADR 0036](0036-record-a-round-as-paid-and-gate-nothing-on-it.md) adds the second
+column, and it is a third event rather than either of those two — a round being
+paid for, which settles a ticket and not a table. That record re-examined ADR
+0021's sitting trigger and found it unfired, so "closed" is still the sitting's
+word and still unused.
+
+**The column grant is no longer one column, and the isolation this record claimed
+for it is narrower than it was.** Above: "A statement setting `restaurant_id`,
+`table_id`, `submission_id` or `placed_at` is refused with `42501` by the
+privilege rather than by review." That is unchanged and still holds for a
+statement nobody read. What no longer holds is anything separating the two acts:
+the role now holds `update (served_at)` **and** `update (paid_at)`, so a
+statement recording a payment could set the moment this record created and the
+privilege would permit it. Each act is kept to its own column by its own
+statement, which is weaker, and 0036 records that rather than leaving the earlier
+sentence to be read as more than it now says.
+
+**The two acts are one function.** `markServed` became `act(pool, digest, id,
+claim)` with the statement as its only parameter, because the shape this record
+settled — claim with an `is null` guard, read back only when the claim reached no
+row — turned out to be the shape the second act wanted unchanged. The `409`
+rejection, the `coalesce` rejection and the window rejection above all carried
+over without re-argument, which is the evidence that the shape was right rather
+than merely first.

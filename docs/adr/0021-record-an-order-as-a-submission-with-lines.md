@@ -120,3 +120,24 @@ An order has one from
 table's own orders back by the code printed on it. That record bounds the read
 in time, and its window is a proxy for the sitting rejected above — so that
 alternative's trigger now has a second reason as well as a second reader.
+
+The sitting's trigger was examined at
+[ADR 0036](0036-record-a-round-as-paid-and-gate-nothing-on-it.md) and did not
+fire. That change records that a round was paid for, which is the closest thing
+this repository has built to the act a sitting exists for — a restaurant settles
+a bill across one, and the word "paid" invites the reading that the trigger has
+come. It has not. What was written above is "**It lands with the first view that
+can close a table**", and recording one round's payment closes no table: it is
+the same distinction ADR 0034 drew when it rejected `closed_at`, one commit
+earlier, for "a ticket going out and a table being cleared are different events".
+
+So the deferral stands as written, and 0036 names what it is waiting for in the
+same words. What that record adds is a second reader for this alternative rather
+than a third reason: payment is now recorded per order, a bill is reconstructed
+from the orders at a table settled together, and a bill-level act — one press
+that settles a whole party's rounds — is the view that fires this trigger.
+
+The price snapshot's trigger did not fire either. 0036 records a moment and no
+amount, and it rejected an amount column on exactly this record's terms: a
+stored amount raises what it should equal, and the only honest answer needs the
+snapshot deferred above.

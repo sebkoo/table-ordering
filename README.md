@@ -9,8 +9,8 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
 **Status:** 2026-08-26 · a member of staff signs in on a page of their own,
-reads every open order in their restaurant, and clears a ticket from the board
-when the kitchen has served it.
+reads every open order in their restaurant, records a round as paid for, and
+clears a ticket from the board when the kitchen has served it.
 
 ## What it looks like
 
@@ -258,6 +258,7 @@ authorization: Bearer …
   "orders": [
     { "id": "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
       "table": { "label": "Table 7" },
+      "paid": false,
       "lines": [{ "name": "Flat white", "quantity": 2 }] }
   ]
 }
@@ -271,7 +272,9 @@ by the policy rather than by the query
 
 It carries the table's label and never the table's code. The code is what a guest
 orders with; the board has no reader for it, and a value that authorises a write
-does not travel where nothing reads it.
+does not travel where nothing reads it. `paid` is a boolean rather than a moment,
+for the reason there is no time on the answer at all: what a row needs is whether
+the control that records a payment still belongs on it.
 
 Open here means recent **and not yet served**. That second half is what the
 kitchen presses:
@@ -302,6 +305,48 @@ A ticket in another restaurant, and an id no order ever carried, are refused
 naming the id would tell a caller that a ticket they cannot see exists somewhere.
 Which restaurant a session may clear in is not in the request and cannot be
 ([ADR 0034](docs/adr/0034-clear-a-ticket-by-recording-when-it-was-served.md)).
+
+**And a round can be recorded as paid for.** The second control on a row, at an
+address shaped like the first:
+
+```
+POST /staff/orders/1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed/paid
+authorization: Bearer …
+```
+
+```
+204
+```
+
+No body either way, a repeat answers as the first act did and moves nothing, and
+a ticket in another restaurant gets the same `404` in the same bytes. It is the
+clearing act with one column changed, because it is the same shape.
+
+What it records is a moment and not money. No amount, no currency, no card and
+no processor: routing a self-hosted restaurant's guests through somebody else's
+checkout is what "no third-party requests" rules out, so what this offers is a
+fact to record rather than a flow to run. An amount would be a ledger, and a
+ledger is a decision nobody has needed yet.
+
+**Nothing is gated on it**, which is what the roadmap row's "rather than a
+requirement" means here. Ordering does not consult it, the guest is never told —
+their own list answers the same bytes before and after — and a ticket still
+leaves the board on `served` alone. A restaurant that never presses it behaves
+exactly as it did before the column existed, and that is pinned by a condition
+rather than promised in this file
+([ADR 0036](docs/adr/0036-record-a-round-as-paid-and-gate-nothing-on-it.md)).
+
+The board's own list does not keep a ticket until it is settled. If it did, a
+restaurant that records no payments would watch nothing ever leave, which is the
+option becoming a requirement. So "open" still means recent and not yet served,
+and the row carries what it knows about payment beside the control that records
+one.
+
+The address itself takes no window and no served clause. Those bound what the
+board *discloses*, not what may be written down: a round settled when the plates
+were cleared was settled, and by then its ticket had left the board. What that
+costs is stated in the limitations below — no page path reaches a served ticket,
+and settling a whole table in one act waits on the sitting.
 
 The guest's own list is deliberately unchanged. A guest is asking whether their
 round reached the kitchen, and that stays true after the kitchen has cooked it;
@@ -339,7 +384,11 @@ instead, and the session survives. And a restaurant with nothing open says so in
 its own sentence — an empty board is a fact about a restaurant, and the other
 three are the page not knowing.
 
-Each row carries the control that clears it. Pressing it sends the request above
+Each row carries the control that clears it, and — while the round is unpaid —
+the control that records a payment. The second disappears once the round is
+recorded, because a button whose press the server answers by writing nothing is
+a button that lies about having something to do; the row says which it is either
+way. Pressing either one sends the request above
 and then asks the board again, so the ticket leaves because the server says it
 has rather than because the page struck the row out — a list the page edited
 would be a second account of the queue, and the two would drift the first time an
@@ -362,7 +411,8 @@ any page this repository serves rather than about one of them.
    another phone at the same table appears without anyone reloading.
 2. The board will keep itself current the same way, and will say how long a
    ticket has waited — the field for that is deliberately not on the answer yet.
-3. Payment, as an option a restaurant turns on rather than a requirement.
+3. A sitting: the row a restaurant actually settles a bill across, which is what
+   the window above is standing in for and what a bill-level act waits on.
 
 ## How a menu request is served
 
@@ -478,8 +528,9 @@ and it is worth being able to run yourself.
 
 ## Roadmap
 
-The rows marked Done are what exists. Everything else is planned, and none of
-it is started.
+Every row is Done. That is a statement about this list and not about the
+product being finished: the list is what was planned when it was written, and
+what each row bought is what the section above describes.
 
 | Step | State |
 | --- | --- |
@@ -498,7 +549,7 @@ it is started.
 | The board on a page staff sign in to | Done |
 | Row-level security on a read, so a menu query drops its scope too | Done |
 | A kitchen board a ticket can be acted on from | Done |
-| Payment, as an option rather than a requirement | Planned |
+| Payment, as an option rather than a requirement | Done |
 
 ## Run it
 
@@ -654,15 +705,31 @@ curl -s localhost:3000/staff/orders -H 'authorization: Bearer THE TOKEN'
 ```
 
 ```json
-{"orders":[{"id":"1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed","table":{"label":"Table 7"},"lines":[{"name":"Flat white","quantity":2}]}]}
+{"orders":[{"id":"1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed","table":{"label":"Table 7"},"paid":false,"lines":[{"name":"Flat white","quantity":2}]}]}
 ```
 
-Clear that ticket, taking the id out of what the board just answered:
+Record that round as paid for, taking the id out of what the board just
+answered:
 
 ```sh
 ticket=$(curl -s localhost:3000/staff/orders -H 'authorization: Bearer THE TOKEN' \
   | sed 's/.*"orders":\[{"id":"\([^"]*\)".*/\1/')
 
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  localhost:3000/staff/orders/$ticket/paid -H 'authorization: Bearer THE TOKEN'
+```
+
+```
+204
+```
+
+Ask for the board again and that ticket is still on it, now with `"paid":true`.
+Nothing left, because payment clears nothing. Run it again and it answers `204`
+again and records nothing further.
+
+Clear that ticket, with the id you already have:
+
+```sh
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   localhost:3000/staff/orders/$ticket/served -H 'authorization: Bearer THE TOKEN'
 ```
@@ -857,6 +924,7 @@ each with the alternatives that were rejected and why.
 - [0033 Read the menu under a policy, and split the resolve from the read](docs/adr/0033-read-the-menu-under-a-policy.md)
 - [0034 Clear a ticket by recording when it was served, and leave the guest's list alone](docs/adr/0034-clear-a-ticket-by-recording-when-it-was-served.md)
 - [0035 Check a suite's migration list against the directory, by two keys](docs/adr/0035-check-a-suites-migration-list-against-the-directory.md)
+- [0036 Record a round as paid, gate nothing on it, and leave the bill to the sitting](docs/adr/0036-record-a-round-as-paid-and-gate-nothing-on-it.md)
 
 ## Known limitations
 
@@ -894,6 +962,34 @@ each with the alternatives that were rejected and why.
   "open" still means recent, so a round the kitchen has cooked is still on their
   page. That is deliberate, and the alternative is rejected out loud in
   [ADR 0034](docs/adr/0034-clear-a-ticket-by-recording-when-it-was-served.md).
+- **No page path records a payment against a ticket that has been served.** The
+  board shows what is recent and not yet served, and the board is where ticket
+  ids come from — so once the kitchen has sent a round out, the control that
+  would record its payment is gone with the row. The address still reaches it:
+  `POST /staff/orders/:id/paid` takes no window and no served clause, because
+  those bound what a read discloses and not what may be written down. What is
+  missing is a view, and the view that would have it is the one that settles a
+  whole table
+  ([ADR 0036](docs/adr/0036-record-a-round-as-paid-and-gate-nothing-on-it.md)).
+- A bill spanning several rounds cannot be settled in one act. Payment is
+  recorded per order, which is the finest grain the schema has and the one a
+  bill reconstructs from; a restaurant settles across a sitting, and there is no
+  sitting row. That is not an oversight in this change — it is the row ADR 0021
+  deferred to "the first view that can close a table", and recording that one
+  round was paid for closes no table. A bill-level act arrives with the sitting.
+- A payment cannot be un-recorded, and nothing records who took it or how. The
+  column is a moment and the act writes it once; a second act answers as the
+  first did and moves nothing. Reversing it needs a reason a payment goes back,
+  which nobody has yet.
+- The order records no amount and no currency, so nothing in the system says
+  what was paid — only that something was. An amount would be a ledger, and a
+  ledger needs the price snapshot ADR 0021 deferred before it could mean
+  anything for an order placed before the menu moved.
+- Nothing takes payment. There is no processor, no checkout and no card
+  handling, and none is planned: routing a self-hosted restaurant's guests
+  through a third party's flow is what "no third-party requests" rules out. How
+  the money actually changes hands is outside this system, which is why what it
+  offers is a fact to record rather than a flow to run.
 - A ticket cannot be put back on the board. There is no un-serve: it would need a
   reason a ticket returns, and nobody has one yet. The row keeps the moment it
   was cleared, so the repair is a new decision rather than a lost fact.
@@ -918,8 +1014,8 @@ each with the alternatives that were rejected and why.
   word it does not carry. The records in `docs/adr/` are outside it on purpose:
   each states what was decided on its date, and a decision that moves is
   superseded rather than rewritten.
-- The board's picture was taken before the control existed and shows no way to
-  clear a ticket. Its caption names the revision it was taken at, which is what
+- The board's picture was taken before either control existed and shows no way to
+  clear a ticket or to record a payment. Its caption names the revision it was taken at, which is what
   makes it a record of that revision rather than a claim about this one; a
   recapture made here could not be captioned honestly at all, because its pixels
   would come from code with no revision until the commit exists.
@@ -991,8 +1087,15 @@ each with the alternatives that were rejected and why.
   board before its kitchen cleared it, or with the sitting ADR 0026 defers the
   guest's window to, whichever lands first. Neither is an argument; both are
   observations.
+- The application role now holds `update` on two columns, one per act, so the
+  privilege no longer tells the two acts apart. A statement recording a payment
+  could set `served_at` instead and the grant would permit it; what keeps each
+  act to its own column is its statement, and what the privilege still refuses —
+  `restaurant_id`, `table_id`, `submission_id`, `placed_at` — it refuses with
+  `42501` for a statement nobody read.
 - Nothing tells a statement that re-scopes itself from one that leaves the job to
-  the policy, and the act's update is now a third statement in that position: a
+  the policy, and the two acts' updates are now a third and a fourth statement in
+  that position: a
   `restaurant_id` predicate added to it reddens no condition in the tree. A predicate comparing `restaurant_id` with the transaction's scope
   would agree with the policy in every state, including the unscoped one where
   both raise, so no condition here can see the difference. The same holds for the
@@ -1005,9 +1108,9 @@ each with the alternatives that were rejected and why.
   which spawns it and reads a record off one stream and a password off the other
   — so the split those two streams exist for is exercised rather than described.
   What is still not checked is the wording it prints them with.
-- Row-level security covers an order and its lines, written, read and now cleared,
-  and a menu item on a read. The act needed no new policy: `0003`'s is `for all`,
-  so it governs an update exactly as it governs a select. `restaurant` and `restaurant_table` carry no policy and cannot:
+- Row-level security covers an order and its lines, written, read, cleared and now
+  recorded as paid, and a menu item on a read. Neither act needed a new policy:
+  `0003`'s is `for all`, so it governs an update exactly as it governs a select. `restaurant` and `restaurant_table` carry no policy and cannot:
   they are what a slug and a printed code are resolved through, so a policy on
   either would have to be satisfied before the scope it defines could be known
   ([ADR 0033](docs/adr/0033-read-the-menu-under-a-policy.md)).
@@ -1173,9 +1276,20 @@ This platform takes zero basis points of card volume. That is a statement about
 what this software charges, not a claim about what a restaurant pays overall:
 the restaurant still pays its own card processor, whoever that is.
 
-Payment handling is optional and not built. If this ever needs to fund itself,
-the honest routes are hosting, support and integration work — the same routes
-that are available under any licence — rather than a cut of the till.
+A round can be recorded as paid for, and nothing requires it. That is the whole
+of what is built: a moment on the order, written by a member of staff, read by
+the board and by nobody else. There is no amount, no currency and no card —
+recording a fact is not handling money, and an amount would be a ledger, which
+is its own decision.
+
+Payment *handling* is not built and no processor is planned. Routing a
+self-hosted restaurant's guests through somebody else's checkout is the thing
+the sentence "no third-party requests" rules out, and it is the reason the
+option is a fact to record rather than a flow to run
+([ADR 0036](docs/adr/0036-record-a-round-as-paid-and-gate-nothing-on-it.md)).
+If this ever needs to fund itself, the honest routes are hosting, support and
+integration work — the same routes that are available under any licence —
+rather than a cut of the till.
 
 ## Licence
 

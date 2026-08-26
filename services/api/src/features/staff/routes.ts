@@ -7,11 +7,18 @@
  * `GET /staff/sessions/current` answers the same identity for a token.
  * `GET /staff/orders` answers the open orders in that token's restaurant.
  * `POST /staff/orders/:id/served` clears one of them from that board.
+ * `POST /staff/orders/:id/paid` records that a round was paid for.
  *
- * The fourth is this router's first write, and it takes no body at all. There is
- * nothing a caller may say about the act beyond which ticket it is for, and an
- * address that took a field would be an address that could take `false` -- which
- * is un-serving, a second behaviour nobody has asked for. ADR 0034.
+ * The last two are this router's writes, and neither takes a body at all. There
+ * is nothing a caller may say about either act beyond which ticket it is for, and
+ * an address that took a field would be an address that could take `false` --
+ * which is un-serving, a second behaviour nobody has asked for. ADR 0034.
+ *
+ * They are one function with one statement swapped, because they are one shape:
+ * resolve, scope, claim, read back. Two callers is what makes {@link act} a seam
+ * rather than a guess about a variation nobody has observed -- and the fold is
+ * load-bearing beyond tidiness, since a `401` at either address leaves the page
+ * through one door, which is why the board's suite pins that path once. ADR 0036.
  *
  * The third address is here rather than in a slice of its own because this
  * router is grouped by the boundary it sits behind: everything in this file
@@ -39,6 +46,7 @@ import { OPEN_WINDOW, SET_SCOPE } from '../order/sql.ts'
 import { digestToken, mintToken, verifyNobody, verifyPassword } from './credential.ts'
 import {
   type BoardRow,
+  MARK_PAID,
   MARK_SERVED,
   OPEN_ORDERS_IN_RESTAURANT,
   OPEN_SESSION,
@@ -115,6 +123,13 @@ const CURRENT_SCHEMA = {
  * reader is the sort the query has already applied, which is the reason the
  * guest's read leaves it out too. The first board view that shows how long a
  * ticket has waited is what adds it. ADR 0030.
+ *
+ * `paid` is a boolean and not a moment, for that same reason: the page needs to
+ * know whether the control to record a payment still belongs on the row, and a
+ * time would be a second value with no reader. It is on this answer and on no
+ * other -- the guest's read of their own table does not carry it, because
+ * payment is a fact about the till and not about whether the food is coming.
+ * ADR 0036.
  */
 const BOARD_SCHEMA = {
   response: {
@@ -126,9 +141,10 @@ const BOARD_SCHEMA = {
           type: 'array',
           items: {
             type: 'object',
-            required: ['id', 'table', 'lines'],
+            required: ['id', 'table', 'lines', 'paid'],
             properties: {
               id: { type: 'string' },
+              paid: { type: 'boolean' },
               table: {
                 type: 'object',
                 required: ['label'],
@@ -170,6 +186,15 @@ const SERVED_SCHEMA = {
   },
 }
 
+/**
+ * The second act's, and it is the first's with one word changed.
+ *
+ * No body in and no body out, for the reasons above. `404` covers a ticket this
+ * session cannot reach exactly as it does for `served`, and answers it in the
+ * same sentence.
+ */
+const PAID_SCHEMA = SERVED_SCHEMA
+
 const REFUSED = 'that email and password do not match'
 const CLOSED = 'that session is not open'
 
@@ -203,6 +228,7 @@ type BoardOrder = {
   id: string
   table: { label: string }
   lines: { name: string; quantity: number }[]
+  paid: boolean
 }
 
 /**
@@ -218,7 +244,7 @@ function group(rows: readonly BoardRow[]): BoardOrder[] {
   for (const row of rows) {
     let open = orders.get(row.order_id)
     if (open === undefined) {
-      open = { id: row.order_id, table: { label: row.table_label }, lines: [] }
+      open = { id: row.order_id, table: { label: row.table_label }, lines: [], paid: row.paid }
       orders.set(row.order_id, open)
     }
     if (row.item_name === null || row.quantity === null) continue
@@ -269,24 +295,28 @@ async function openOrders(pool: Pool, digest: Buffer): Promise<BoardOrder[] | nu
 }
 
 /** What one act concluded. `refused` is a session that does not resolve, never an order. */
-type Acted = 'served' | 'not-here' | 'refused'
+type Acted = 'recorded' | 'not-here' | 'refused'
 
 /**
  * One transaction, in this router's established shape: resolve what the caller
  * holds, set the scope from the row it returned, then write.
  *
- * Two statements, because one cannot answer both questions. The update tells a
+ * Two statements, because one cannot answer both questions. The claim tells a
  * first act from everything else; the read-back tells a repeat from an order
- * this scope cannot see. `and served_at is null` on the first is what makes the
+ * this scope cannot see. The `is null` clause each claim carries is what makes a
  * repeat write nothing at all rather than rewrite the row with the same value.
  *
+ * `claim` is the only thing that differs between the two acts, which is why they
+ * are one function. Both are `update ... where id = $1 and <column> is null
+ * returning id`, and a divergence between them would be the thing to explain.
+ *
  * Neither statement names a restaurant. The policy `0003` put on `table_order`
- * is `for all`, so it governs this update exactly as it governs the board's
+ * is `for all`, so it governs both updates exactly as it governs the board's
  * read, and an id belonging to another restaurant reaches zero rows twice --
  * which is the same thing an id belonging to nobody does, and the reason both
  * are answered with the same sentence.
  */
-async function markServed(pool: Pool, digest: Buffer, id: string): Promise<Acted> {
+async function act(pool: Pool, digest: Buffer, id: string, claim: string): Promise<Acted> {
   const client = await pool.connect()
 
   try {
@@ -301,18 +331,18 @@ async function markServed(pool: Pool, digest: Buffer, id: string): Promise<Acted
 
     await client.query(SET_SCOPE, [session.restaurant_id])
 
-    const acted = await client.query<{ id: string }>(MARK_SERVED, [id])
+    const acted = await client.query<{ id: string }>(claim, [id])
     if (acted.rows[0] !== undefined) {
       await client.query('commit')
-      return 'served'
+      return 'recorded'
     }
 
     const existing = await client.query<ServedRow>(ORDER_IN_RESTAURANT, [id])
     await client.query('commit')
     // A row here is one this scope can see and this act did not change, which on
-    // this statement has one cause: it was already served. The same answer as
-    // the first act, because a second screen cannot act on the difference.
-    return existing.rows[0] === undefined ? 'not-here' : 'served'
+    // either claim has one cause: it had already been recorded. The same answer
+    // as the first act, because a second screen cannot act on the difference.
+    return existing.rows[0] === undefined ? 'not-here' : 'recorded'
   } catch (error) {
     await client.query('rollback')
     throw error
@@ -380,6 +410,10 @@ export function staffRoutes(pool: Pool) {
       return { orders }
     })
 
+    // The two acts, and the only thing that differs between them is the
+    // statement. Written out twice rather than registered from a table: an
+    // address is something a reader should be able to find by searching for it,
+    // and a loop over a pair would hide both.
     app.post<{ Params: { id: string } }>(
       '/staff/orders/:id/served',
       { schema: SERVED_SCHEMA },
@@ -387,7 +421,22 @@ export function staffRoutes(pool: Pool) {
         const token = bearer(request.headers.authorization)
         if (token === null) return reply.code(401).send({ error: CLOSED })
 
-        const acted = await markServed(pool, digestToken(token), request.params.id)
+        const acted = await act(pool, digestToken(token), request.params.id, MARK_SERVED)
+        if (acted === 'refused') return reply.code(401).send({ error: CLOSED })
+        if (acted === 'not-here') return reply.code(404).send({ error: NOT_HERE })
+
+        return reply.code(204).send()
+      },
+    )
+
+    app.post<{ Params: { id: string } }>(
+      '/staff/orders/:id/paid',
+      { schema: PAID_SCHEMA },
+      async (request, reply) => {
+        const token = bearer(request.headers.authorization)
+        if (token === null) return reply.code(401).send({ error: CLOSED })
+
+        const acted = await act(pool, digestToken(token), request.params.id, MARK_PAID)
         if (acted === 'refused') return reply.code(401).send({ error: CLOSED })
         if (acted === 'not-here') return reply.code(404).send({ error: NOT_HERE })
 

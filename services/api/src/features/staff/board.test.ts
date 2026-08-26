@@ -41,7 +41,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from '../../main.ts'
 import { OPEN_WINDOW, SET_SCOPE } from '../order/sql.ts'
 import { digestToken, hashPassword, mintToken } from './credential.ts'
-import { type BoardRow, MARK_SERVED, OPEN_ORDERS_IN_RESTAURANT } from './sql.ts'
+import { type BoardRow, MARK_PAID, MARK_SERVED, OPEN_ORDERS_IN_RESTAURANT } from './sql.ts'
 
 const OWNER_DATABASE_URL =
   'postgres://table_ordering:table_ordering_dev@127.0.0.1:55432/table_ordering'
@@ -58,6 +58,7 @@ const MIGRATION_FILES = [
   '0004-create-staff.up.sql',
   '0005-scope-the-menu-read.up.sql',
   '0006-record-an-order-served.up.sql',
+  '0007-record-an-order-paid.up.sql',
 ]
 
 function migration(name: string): string {
@@ -105,12 +106,31 @@ const AMBER = '44444444-4444-4444-4444-444444444444'
 const VIOLET = '55555555-5555-5555-5555-555555555555'
 const SLATE = '66666666-6666-6666-6666-666666666666'
 
+/**
+ * The two the paid act is exercised in, and they are two rather than one for the
+ * reason VIOLET and SLATE are two.
+ *
+ * PLUM is condition 1's alone. Its expectation is a board *literal* over a whole
+ * restaurant, so an order any other condition acted in would change it.
+ *
+ * WHEAT is the option's own restaurant, and it holds two tables rather than one.
+ * `W1` is what the guest is read at, before and after being recorded paid; `W2`
+ * is never recorded paid at all and is what `served` is asked to clear. They are
+ * at different tables so that the guest read of one carries nothing of the other,
+ * and the board read afterwards still holds `W1` -- which is what a filter
+ * widened to keep unpaid tickets would change.
+ */
+const PLUM = '77777777-7777-7777-7777-777777777777'
+const WHEAT = '88888888-8888-8888-8888-888888888888'
+
 const ADA = 'f0000000-0000-4000-8000-000000000001'
 const BO = 'f0000000-0000-4000-8000-000000000002'
 const CY = 'f0000000-0000-4000-8000-000000000003'
 const DEE = 'f0000000-0000-4000-8000-000000000004'
 const EVE = 'f0000000-0000-4000-8000-000000000005'
 const FLO = 'f0000000-0000-4000-8000-000000000006'
+const GIL = 'f0000000-0000-4000-8000-000000000007'
+const HAL = 'f0000000-0000-4000-8000-000000000008'
 
 const ADA_EMAIL = 'ada@blue-door.example'
 
@@ -122,6 +142,9 @@ const AMBER_CODE = '5e2b8d43a1fc'
 const RED_CODE = 'a83f6021d7b4'
 const VIOLET_CODE = '7c04b9d3e618'
 const SLATE_CODE = '2a6f8051cb73'
+const PLUM_CODE = '3b7e1f60a29c'
+const WHEAT_CODE_A = '8d05c2e74b1f'
+const WHEAT_CODE_B = 'e61a93f4d7b2'
 
 const BLUE_TABLE_1 = 'b0000000-0000-4000-8000-000000000001'
 const BLUE_TABLE_2 = 'b0000000-0000-4000-8000-000000000002'
@@ -130,6 +153,9 @@ const GREEN_TABLE = 'b0000000-0000-4000-8000-000000000004'
 const AMBER_TABLE = 'b0000000-0000-4000-8000-000000000005'
 const VIOLET_TABLE = 'b0000000-0000-4000-8000-000000000006'
 const SLATE_TABLE = 'b0000000-0000-4000-8000-000000000007'
+const PLUM_TABLE = 'b0000000-0000-4000-8000-000000000008'
+const WHEAT_TABLE_A = 'b0000000-0000-4000-8000-000000000009'
+const WHEAT_TABLE_B = 'b0000000-0000-4000-8000-000000000010'
 
 const FLAT_WHITE = 'c0000000-0000-4000-8000-000000000001'
 const CINNAMON_BUN = 'c0000000-0000-4000-8000-000000000002'
@@ -137,6 +163,8 @@ const RED_PINT = 'c0000000-0000-4000-8000-000000000003'
 const AMBER_SOUP = 'c0000000-0000-4000-8000-000000000004'
 const VIOLET_TART = 'c0000000-0000-4000-8000-000000000005'
 const SLATE_STEW = 'c0000000-0000-4000-8000-000000000006'
+const PLUM_SCONE = 'c0000000-0000-4000-8000-000000000007'
+const WHEAT_LOAF = 'c0000000-0000-4000-8000-000000000008'
 
 /**
  * The two Blue Door orders are inserted by one statement, so they share a
@@ -161,6 +189,21 @@ const S5 = 'a0000000-0000-4000-8000-000000000009'
 const S6 = 'a0000000-0000-4000-8000-000000000010'
 const S7IN = 'a0000000-0000-4000-8000-000000000011'
 const S7OUT = 'a0000000-0000-4000-8000-000000000012'
+
+/**
+ * The paid act's own orders, on the same rule: one per condition that mutates.
+ * `S12` is placed outside the window and `S11` is seeded already served, because
+ * those are the two states the act deliberately does not refuse.
+ */
+const P1 = 'a0000000-0000-4000-8000-000000000013'
+const P2 = 'a0000000-0000-4000-8000-000000000014'
+const S8 = 'a0000000-0000-4000-8000-000000000015'
+const S9 = 'a0000000-0000-4000-8000-000000000016'
+const S10 = 'a0000000-0000-4000-8000-000000000017'
+const S11 = 'a0000000-0000-4000-8000-000000000018'
+const S12 = 'a0000000-0000-4000-8000-000000000019'
+const W1 = 'a0000000-0000-4000-8000-000000000020'
+const W2 = 'a0000000-0000-4000-8000-000000000021'
 
 /** An id no order in this schema carries. The absent half of the 404 comparison. */
 const NO_SUCH_ORDER = 'a0000000-0000-4000-8000-0000000000ff'
@@ -207,6 +250,7 @@ type BoardOrder = {
   id: string
   table: { label: string }
   lines: { name: string; quantity: number }[]
+  paid: boolean
 }
 type Board = { orders: BoardOrder[] }
 
@@ -236,12 +280,44 @@ function ids(answer: Partial<Board>): string[] {
   return (answer.orders ?? []).map((order) => order.id)
 }
 
+/**
+ * Whether each order on an answer has been recorded paid, in that same sequence.
+ *
+ * A third projector rather than a field added to {@link rounds}: the conditions
+ * above assert board literals over whole restaurants, and a flag appearing inside
+ * their expectations would couple every one of them to a column none of them is
+ * about.
+ */
+function states(answer: Partial<Board>): (boolean | undefined)[] {
+  return (answer.orders ?? []).map((order) => order.paid)
+}
+
 /** The act, with the token in a header or with no header at all. It carries no body. */
 async function serve(id: string, token: string | null): Promise<Response> {
   return fetch(`${origin}/staff/orders/${id}/served`, {
     method: 'POST',
     headers: token === null ? {} : { authorization: `Bearer ${token}` },
   })
+}
+
+/** The second act, in the shape of the first. It carries no body either. */
+async function pay(id: string, token: string | null): Promise<Response> {
+  return fetch(`${origin}/staff/orders/${id}/paid`, {
+    method: 'POST',
+    headers: token === null ? {} : { authorization: `Bearer ${token}` },
+  })
+}
+
+/**
+ * What a guest at a table is answered, as bytes.
+ *
+ * Read as text and never parsed, because the claim these conditions make about it
+ * is that recording a payment changes nothing a guest is told -- and a comparison
+ * of two parsed objects would call two different sets of keys equal if the values
+ * under them matched.
+ */
+async function guestOrders(code: string): Promise<string> {
+  return (await fetch(`${origin}/tables/${code}/orders`)).text()
 }
 
 /**
@@ -257,6 +333,15 @@ async function servedAt(id: string): Promise<string | null> {
     [id],
   )
   return rows[0]?.served_at ?? null
+}
+
+/** The second moment, read the same way and for the same reason. */
+async function paidAt(id: string): Promise<string | null> {
+  const { rows } = await owner.query<{ paid_at: string | null }>(
+    'select paid_at::text as paid_at from table_order where id = $1',
+    [id],
+  )
+  return rows[0]?.paid_at ?? null
 }
 
 /**
@@ -530,6 +615,100 @@ beforeAll(async () => {
        ($6, $10, $11, 1),
        ($7, $10, $11, 1)`,
     [V1, V2, S2, S5, S6, S7IN, S7OUT, VIOLET, VIOLET_TART, SLATE, SLATE_STEW],
+  )
+
+  // PLUM and WHEAT, the paid act's own restaurants. Seeded after the rest so the
+  // block reads as one unit; nothing above it touches either.
+  await owner.query(
+    `insert into restaurant (id, slug, name) values
+       ($1, 'plum-tree', 'The Plum Tree'),
+       ($2, 'wheat-sheaf', 'The Wheat Sheaf')`,
+    [PLUM, WHEAT],
+  )
+
+  await owner.query(
+    `insert into menu_item (id, restaurant_id, name, price_minor, currency, sort_order) values
+       ($1, $3, 'Fruit scone', 350, 'GBP', 10),
+       ($2, $4, 'Half loaf', 250, 'GBP', 10)`,
+    [PLUM_SCONE, WHEAT_LOAF, PLUM, WHEAT],
+  )
+
+  await owner.query(
+    `insert into restaurant_table (id, restaurant_id, code, label) values
+       ($1, $4, $6, 'Window 1'),
+       ($2, $5, $7, 'Nook 1'),
+       ($3, $5, $8, 'Nook 2')`,
+    [PLUM_TABLE, WHEAT_TABLE_A, WHEAT_TABLE_B, PLUM, WHEAT, PLUM_CODE, WHEAT_CODE_A, WHEAT_CODE_B],
+  )
+
+  await owner.query(
+    `insert into staff (id, restaurant_id, email, name, credential) values
+       ($1, $3, 'gil@plum-tree.example', 'Gil', $5),
+       ($2, $4, 'hal@wheat-sheaf.example', 'Hal', $5)`,
+    [GIL, HAL, PLUM, WHEAT, credential],
+  )
+
+  for (const [staff, restaurant] of [
+    [GIL, PLUM],
+    [HAL, WHEAT],
+  ] as const) {
+    const token = mintToken()
+    tokens[staff] = token
+    await owner.query(OPEN_SESSION_ROW, [staff, restaurant, digestToken(token)])
+  }
+
+  // One statement, so `[P1, P2]` is a decidable sequence, as the two pairs above
+  // are.
+  await owner.query(
+    `insert into table_order (id, restaurant_id, table_id, submission_id) values
+       ($1, $5, $6, $3),
+       ($2, $5, $6, $4)`,
+    [P1, P2, submission(922), submission(923), PLUM, PLUM_TABLE],
+  )
+
+  // One SLATE order per remaining paid condition. `S11` is seeded already served
+  // and `S12` outside the window, which are the two states the act is deliberately
+  // not bounded by -- each placed by arithmetic on the constant, never at a
+  // literal age.
+  await owner.query(
+    `insert into table_order (id, restaurant_id, table_id, submission_id) values
+       ($1, $6, $7, $4),
+       ($2, $6, $7, $5),
+       ($3, $6, $7, $8)`,
+    [S8, S9, S10, submission(924), submission(925), SLATE, SLATE_TABLE, submission(926)],
+  )
+  await owner.query(
+    `insert into table_order (id, restaurant_id, table_id, submission_id, served_at) values
+       ($1, $2, $3, $4, now())`,
+    [S11, SLATE, SLATE_TABLE, submission(927)],
+  )
+  await owner.query(
+    `insert into table_order (id, restaurant_id, table_id, submission_id, placed_at) values
+       ($1, $2, $3, $4, now() - $5::interval - interval '5 minutes')`,
+    [S12, SLATE, SLATE_TABLE, submission(928), OPEN_WINDOW],
+  )
+
+  // WHEAT's two, at its two tables, so a guest read of one carries nothing of the
+  // other.
+  await owner.query(
+    `insert into table_order (id, restaurant_id, table_id, submission_id) values
+       ($1, $5, $6, $3),
+       ($2, $5, $7, $4)`,
+    [W1, W2, submission(929), submission(930), WHEAT, WHEAT_TABLE_A, WHEAT_TABLE_B],
+  )
+
+  await owner.query(
+    `insert into table_order_line (order_id, restaurant_id, menu_item_id, quantity) values
+       ($1, $10, $11, 1),
+       ($2, $10, $11, 2),
+       ($3, $12, $13, 1),
+       ($4, $12, $13, 1),
+       ($5, $12, $13, 1),
+       ($6, $12, $13, 1),
+       ($7, $12, $13, 1),
+       ($8, $14, $15, 1),
+       ($9, $14, $15, 1)`,
+    [P1, P2, S8, S9, S10, S11, S12, W1, W2, PLUM, PLUM_SCONE, SLATE, SLATE_STEW, WHEAT, WHEAT_LOAF],
   )
 
   app = new Pool({
@@ -875,5 +1054,225 @@ describe('the ticket a member of staff clears', () => {
       (await servedAt(S7OUT)) !== null,
       JSON.stringify(after) === JSON.stringify(before),
     ]).toEqual([false, 204, true, true])
+  })
+})
+
+/**
+ * The second act, and the roadmap's last row.
+ *
+ * A member of staff records that a round was paid for. Nothing is gated on it:
+ * ordering does not consult it, the guest is never told, and a ticket still
+ * leaves the board on `served` alone -- which is the row's own "rather than a
+ * requirement", pinned here as a value diff rather than written down as a
+ * sentence. ADR 0036.
+ *
+ * The shape mirrors the block above deliberately. Where a condition here reads
+ * the same as its `served` neighbour, that is the point: the two acts are one
+ * transaction shape with one statement swapped, and a divergence between them
+ * would be the thing to explain.
+ */
+describe('the round a member of staff records as paid', () => {
+  // The change this commit exists for, stated as a difference between two reads
+  // of the same board. The ticket has to *stay* -- payment is not a clearing --
+  // and the flag beside it has to move, and only a comparison of the whole
+  // answer says both at once.
+  //
+  // PLUM is this condition's alone, so the two literals below are facts about
+  // the fixture rather than about which neighbour ran first.
+  it('records the moment and leaves the ticket on the board', async () => {
+    const before = await (await board(tokens[GIL] ?? null)).json()
+    const recorded = await paidAt(P1)
+    const acted = await pay(P1, tokens[GIL] ?? null)
+    const after = await (await board(tokens[GIL] ?? null)).json()
+
+    expect([
+      recorded,
+      acted.status,
+      (await paidAt(P1)) !== null,
+      ids(before as Partial<Board>),
+      ids(after as Partial<Board>),
+      states(after as Partial<Board>),
+    ]).toEqual([null, 204, true, [P1, P2], [P1, P2], [true, false]])
+  })
+
+  // Two screens, one round, both tapped. The second answer is the first answer
+  // and the moment does not move, which is what says the second act wrote
+  // nothing at all rather than rewriting the row with the value it held.
+  //
+  // `recorded !== null` is not redundant beside the equality: two nulls are
+  // equal, so without it a route that recorded nothing would satisfy the
+  // comparison this condition is named for.
+  it('answers a repeat as it answered the first act, and writes nothing further', async () => {
+    const first = await pay(S8, tokens[FLO] ?? null)
+    const firstBody = await first.text()
+    const recorded = await paidAt(S8)
+
+    const second = await pay(S8, tokens[FLO] ?? null)
+    const secondBody = await second.text()
+    const later = await paidAt(S8)
+
+    expect([
+      first.status,
+      second.status,
+      firstBody,
+      secondBody,
+      recorded !== null,
+      recorded === later,
+    ]).toEqual([204, 204, '', '', true, true])
+  })
+
+  // A's staff aim at B's ticket, and at an id no order carries. Both refused,
+  // and in the same bytes -- a sentence naming the id would tell a caller that
+  // one of the two exists somewhere.
+  it("refuses another restaurant's ticket in the words a ticket that never existed gets", async () => {
+    const [wrong, absent] = await Promise.all([
+      pay(RED_ORDER, tokens[ADA] ?? null),
+      pay(NO_SUCH_ORDER, tokens[ADA] ?? null),
+    ])
+    const [wrongText, absentText] = [await wrong.text(), await absent.text()]
+
+    expect([
+      wrong.status,
+      absent.status,
+      wrongText,
+      absentText,
+      wrongText === absentText,
+      await paidAt(RED_ORDER),
+    ]).toEqual([404, 404, NOT_HERE_BODY, NOT_HERE_BODY, true, null])
+  })
+
+  // Refused as values, never by exception, and the row is read afterwards
+  // because a refusal that still wrote would be the worst of both.
+  it('refuses a signed-out and a forged act, and writes nothing', async () => {
+    const [absent, forged] = await Promise.all([
+      pay(RED_ORDER, null),
+      pay(RED_ORDER, nearMiss(tokens[ADA] ?? '')),
+    ])
+
+    expect([
+      [absent.status, await absent.json()],
+      [forged.status, await forged.json()],
+      await paidAt(RED_ORDER),
+    ]).toEqual([[401, { error: CLOSED }], [401, { error: CLOSED }], null])
+  })
+
+  // One statement, three scopes, and the order of the first two is load-bearing
+  // for the reason the `served` scope condition gives: the wrong-scope call runs
+  // while `S9` is still unpaid, so the zero it reaches is the policy refusing it.
+  it('scopes the update by the policy rather than by the statement', async () => {
+    const run = (client: PoolClient) => client.query(MARK_PAID, [S9])
+
+    const other = await scoped(app, BLUE, run)
+    const owning = await scoped(app, SLATE, run)
+
+    // A pool of its own: the code a missing scope raises depends on the
+    // connection's history.
+    const unscoped = new Pool({
+      connectionString: asAppRole(CONNECTION_STRING),
+      options: `-c search_path=${SCHEMA}`,
+      max: 1,
+    })
+    let none: string
+    try {
+      none = await sqlstate(() => unscoped.query(MARK_PAID, [S9]))
+    } finally {
+      await unscoped.end()
+    }
+
+    expect([owning.rowCount, other.rowCount, none]).toEqual([1, 0, '42704'])
+  })
+
+  // The second column-scoped grant, at the layer that holds it. The role may set
+  // this column and not `placed_at`, so a statement naming the second is refused
+  // before a policy is consulted. Two transactions, because a refused statement
+  // aborts the one it was sent in.
+  //
+  // What this no longer establishes, and `0006`'s neighbour no longer does
+  // either, is that the two acts are isolated *from each other*: the role now
+  // holds both columns, so what keeps each act to its own is its statement.
+  it('grants the update on one column, so a statement naming another is refused', async () => {
+    const moved = await sqlstate(() =>
+      scoped(app, SLATE, (client) =>
+        client.query('update table_order set placed_at = now() where id = $1', [S10]),
+      ),
+    )
+    const paid = await sqlstate(() =>
+      scoped(app, SLATE, (client) =>
+        client.query('update table_order set paid_at = now() where id = $1', [S10]),
+      ),
+    )
+
+    expect([moved, paid]).toEqual(['42501', 'no error'])
+  })
+
+  // The board's filter bounds what a read discloses, not what a write may
+  // record. A round settled after the plates were cleared was settled, and the
+  // ticket it belongs to left the board when the kitchen sent it out.
+  //
+  // The last element is an equality between two reads this condition takes
+  // itself, never a literal, so whatever a neighbour acted on in SLATE earlier
+  // is in both reads or in neither.
+  it('records a ticket that was already served, and the board does not change', async () => {
+    const before = ids((await (await board(tokens[FLO] ?? null)).json()) as Partial<Board>)
+    const acted = await pay(S11, tokens[FLO] ?? null)
+    const after = ids((await (await board(tokens[FLO] ?? null)).json()) as Partial<Board>)
+
+    expect([
+      (await servedAt(S11)) !== null,
+      before.includes(S11),
+      acted.status,
+      (await paidAt(S11)) !== null,
+      JSON.stringify(after) === JSON.stringify(before),
+    ]).toEqual([true, false, 204, true, true])
+  })
+
+  // The window, which is the other bound the act does not take. Split from the
+  // condition above rather than folded into it: a `served_at is null` predicate
+  // on the statement and a window predicate on it are two different mistakes,
+  // and one condition over both subjects would be reddened by either with no way
+  // to say which.
+  it('records a ticket the window no longer shows, and the board does not change', async () => {
+    const before = ids((await (await board(tokens[FLO] ?? null)).json()) as Partial<Board>)
+    const acted = await pay(S12, tokens[FLO] ?? null)
+    const after = ids((await (await board(tokens[FLO] ?? null)).json()) as Partial<Board>)
+
+    expect([
+      (await servedAt(S12)) === null,
+      before.includes(S12),
+      acted.status,
+      (await paidAt(S12)) !== null,
+      JSON.stringify(after) === JSON.stringify(before),
+    ]).toEqual([true, false, 204, true, true])
+  })
+
+  /**
+   * The option, pinned.
+   *
+   * Two halves of one claim. A guest is told nothing: the bytes their table
+   * answers with are the same before and after a payment is recorded, and the
+   * word is not in them at all. And a ticket nobody recorded a payment for still
+   * clears on `served` alone -- `W2` is never paid, and after it is served the
+   * board holds `W1` and not it.
+   *
+   * The second element is not redundant beside the first. A leak that rendered
+   * the field as `false` on every order would leave the two bodies equal, and
+   * only a test for the key itself sees it.
+   */
+  it('tells a guest nothing, and still clears a ticket nobody paid for', async () => {
+    const guestBefore = await guestOrders(WHEAT_CODE_A)
+    await pay(W1, tokens[HAL] ?? null)
+    const guestAfter = await guestOrders(WHEAT_CODE_A)
+
+    const cleared = await serve(W2, tokens[HAL] ?? null)
+    const board2 = ids((await (await board(tokens[HAL] ?? null)).json()) as Partial<Board>)
+
+    expect([
+      guestAfter === guestBefore,
+      guestAfter.includes('paid'),
+      (await paidAt(W1)) !== null,
+      await paidAt(W2),
+      cleared.status,
+      board2,
+    ]).toEqual([true, false, true, null, 204, [W1]])
   })
 })
