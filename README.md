@@ -856,6 +856,7 @@ each with the alternatives that were rejected and why.
 - [0032 Show both pages in the README as dated captures, and defer the check that would hold them](docs/adr/0032-show-both-pages-as-dated-captures.md)
 - [0033 Read the menu under a policy, and split the resolve from the read](docs/adr/0033-read-the-menu-under-a-policy.md)
 - [0034 Clear a ticket by recording when it was served, and leave the guest's list alone](docs/adr/0034-clear-a-ticket-by-recording-when-it-was-served.md)
+- [0035 Check a suite's migration list against the directory, by two keys](docs/adr/0035-check-a-suites-migration-list-against-the-directory.md)
 
 ## Known limitations
 
@@ -1014,21 +1015,21 @@ each with the alternatives that were rejected and why.
   one, because a resolve, a scope and a read cannot be one statement. Nothing is
   deployed, so no number is at risk; it is named because it is a real cost and not
   a free tidy-up.
-- Every test suite applies the whole migration sequence, and nothing checks that
-  it does. A list chosen by which files a suite reaches was fine while every
-  migration created something; an `alter` makes a short list silent, so the rule
-  is the full prefix. There are **ten** such lists, not the seven ADR 0033
-  counted: three suites carry a `.down.sql` list as well, and `0006` is the first
-  change with a down file they could have omitted. What that buys was measured
-  rather than assumed — with `0006`'s down file in place, dropping `0006` from
-  `menu.test.ts` or `staff.test.ts` now reddens their own down conditions, so
-  five of the seven up lists are held by a condition and two —
-  `menu.browser.test.ts` and `order.browser.test.ts` — are held by review alone.
-  The down lists themselves are held by nothing: dropping `0006`'s down file on
-  its own reddens no condition, because `0003`'s down drops the table the column
-  hangs on. ADR 0033 named the next migration as the trigger for a rule; this is
-  that migration, and the rule is the next commit rather than this one
-  ([ADR 0034](docs/adr/0034-clear-a-ticket-by-recording-when-it-was-served.md)).
+- Every test suite applies the whole migration sequence, and a convention rule is
+  what says so. A list chosen by which files a suite reaches was fine while every
+  migration created something; an `alter` makes a short list silent, because the
+  suite then passes against a schema that exists nowhere. There are **ten** such
+  lists in seven files — seven `.up.sql` lists ascending and three `.down.sql`
+  lists descending — and the rule compares each with `services/api/migrations`
+  itself rather than with a number written down beside it
+  ([ADR 0035](docs/adr/0035-check-a-suites-migration-list-against-the-directory.md)).
+- That rule finds a list by what an array holds, not by what it is called, because
+  the ten are written under three constant names, close two different ways and sit
+  at two indents. A list written some other way would be invisible to it, so a
+  second selector names any suite that applies migrations and yields no list it can
+  read. What that still does not catch is a file losing one of two lists, which the
+  other list satisfies; two conditions hold the census itself, by two keys that go
+  blind to different things.
 - **A menu item that has been ordered cannot be removed from the menu.** The
   order line's foreign key to `menu_item` is `NO ACTION`, so the delete is
   refused. Deleting the whole restaurant is refused too, and by the same
@@ -1148,7 +1149,7 @@ each with the alternatives that were rejected and why.
   input that produced the divergence in
   [ADR 0022](docs/adr/0022-take-a-checks-inputs-from-the-repository.md), not
   every way a check could learn something about its operator.
-- The convention checker carries seven rules. The rest arrive with the code they
+- The convention checker carries eight rules. The rest arrive with the code they
   govern, so that each rule shows up to a set of subjects that already comply.
 - `compose.yaml` carries development credentials inline, and starts a Redis
   that nothing connects to.

@@ -82,6 +82,17 @@ export type RunStepCommand = {
   text: string
 }
 
+export type MigrationList = {
+  /** Repository-relative path of the test file carrying it. */
+  path: string
+  /** 1-based line the declaration begins on, which is the line a reader has to edit. */
+  line: number
+  /** The constant's name, so a violation says which of a file's lists it is. */
+  name: string
+  /** The filenames it names, in the order it names them. */
+  files: string[]
+}
+
 export type WindowMention = {
   /** Repository-relative path of the file carrying it. */
   path: string
@@ -161,6 +172,30 @@ export type ConventionInput = {
    * value would stop seeing a sentence at the moment it went wrong.
    */
   windowMentions: WindowMention[]
+  /**
+   * Every file in `services/api/migrations`, ascending, up and down together.
+   * This is the authority a suite's list is compared against, so it arrives as
+   * the directory rather than as a count: a recorded number is a second place
+   * for the sequence to be true, and the two drift the moment one is edited.
+   */
+  migrationDirectory: string[]
+  /**
+   * Every migration list a feature suite declares, in path then file then source
+   * order. Content-keyed rather than name-keyed, because the ten in this tree are
+   * written under three different constant names, close two different ways and sit
+   * at two different indents -- a collector keyed on any one of those three finds a
+   * subset and reports no violations, which is the silence this rule exists to end.
+   */
+  migrationLists: MigrationList[]
+  /**
+   * Every feature test file that names the migrations directory, in path order.
+   *
+   * The second selector, and it is what stops the first losing subjects quietly. A
+   * list that is renamed, reshaped or emptied stops being collected, and without
+   * this the rule would report one subject fewer and go on passing. A file that
+   * applies migrations and yields no list is the list gone quiet, and it is named.
+   */
+  migrationAppliers: string[]
   /** Treat "no history to evaluate" as a failure rather than a skip. */
   requireHistory: boolean
 }
@@ -550,6 +585,67 @@ export function openWindowRestatedRule(input: ConventionInput): Rule {
   }
 }
 
+/**
+ * A suite applies the whole migration sequence, and its list says which files.
+ *
+ * `b895e42` chose each suite's list by which files that suite reached, which was
+ * serviceable while every migration was a `create`: `0004` creates tables four of
+ * the suites never touch, so excluding it changed nothing they could observe. An
+ * `alter` turns the same reasoning into a silent failure -- a suite whose list
+ * omits it passes against a schema that exists nowhere -- so ADR 0033 made the
+ * rule the full prefix and ADR 0034 named this commit as the one that checks it.
+ *
+ * The comparison is with the directory and never with a number. A count written
+ * here would be a second place for the sequence to be true, and the drift it
+ * invites is the one this rule is for.
+ *
+ * Order, not membership. A down sequence runs newest first, so a down list is the
+ * directory reversed; a set comparison would call a list that drops `0003` before
+ * `0002` whole, and that list applies a drop to a table that still has dependants.
+ */
+export function migrationListFullPrefixRule(input: ConventionInput): Rule {
+  return {
+    name: 'migration-list-full-prefix',
+    expectsSubjects: true,
+    check(): Outcome {
+      const violations: Violation[] = []
+      const up = input.migrationDirectory.filter((name) => name.endsWith(UP_SUFFIX))
+      const down = input.migrationDirectory.filter((name) => name.endsWith(DOWN_SUFFIX)).reverse()
+
+      // The files that apply migrations and yielded nothing, first. A list this
+      // collector cannot see is indistinguishable from a list that is not there,
+      // and reporting the second as neither would be the rule quietly inspecting
+      // one subject fewer -- the defect it exists to catch, one level up.
+      const carrying = new Set(input.migrationLists.map((list) => list.path))
+      for (const path of input.migrationAppliers) {
+        if (carrying.has(path)) continue
+        violations.push({
+          where: path,
+          detail: 'names the migrations directory and carries no migration list this rule can read',
+        })
+      }
+
+      for (const list of input.migrationLists) {
+        // A list of down files is compared with the reverse; anything else, including
+        // a list mixing the two, is compared with the up sequence and disagrees.
+        const whole = list.files.every((file) => file.endsWith(DOWN_SUFFIX)) ? down : up
+        const said = list.files.join(', ')
+        const expected = whole.join(', ')
+        if (said === expected) continue
+
+        violations.push({
+          where: `${list.path} line ${list.line} (${list.name})`,
+          detail: `declares:   ${said}\n        migrations: ${expected}`,
+        })
+      }
+
+      const subjects = input.migrationLists.length
+      if (violations.length > 0) return { status: 'fail', subjects, violations }
+      return { status: 'pass', subjects }
+    },
+  }
+}
+
 export function createRules(input: ConventionInput): Rule[] {
   return [
     readmeStatusDateRule(input),
@@ -559,6 +655,7 @@ export function createRules(input: ConventionInput): Rule[] {
     workflowJobTimeoutRule(input),
     runStepSingleTransactionRule(input),
     openWindowRestatedRule(input),
+    migrationListFullPrefixRule(input),
   ]
 }
 
@@ -710,6 +807,7 @@ function names(path: string, kind: 'file' | 'directory'): string[] {
 }
 
 const UP_SUFFIX = '.up.sql'
+const DOWN_SUFFIX = '.down.sql'
 
 function readMigrations(root: string): Migration[] {
   const migrations: Migration[] = []
@@ -970,6 +1068,129 @@ function readWindowMentions(root: string): WindowMention[] {
   return mentions
 }
 
+/**
+ * The migrations directory, named once, the way `WINDOW_SOURCE` names the file
+ * that owns the window. A second service's migrations are outside this rule, and
+ * that limit is recorded in ADR 0035 rather than guessed at here: the trigger for
+ * widening it is the second service that gets a directory of its own.
+ */
+const MIGRATION_SOURCE = ['services', 'api', 'migrations'] as const
+
+/** A migration filename: the ordinal, the name, the direction. */
+const MIGRATION_FILENAME = /^\d{4}-[a-z0-9-]+\.(?:up|down)\.sql$/
+
+const TEST_SUFFIX = '.test.ts'
+
+/**
+ * How a suite says which directory it applies from. All seven build the path from
+ * this literal, and each carries exactly one of them.
+ *
+ * A suite that builds the path some other way is invisible to this, which is this
+ * selector's limit and is recorded rather than hidden. What narrows it is that the
+ * lists themselves are collected by a different key, so the two go blind to
+ * different things.
+ */
+const APPLIES_MIGRATIONS = "'migrations'"
+
+/** `const NAME = [` alone on its line, which is how all ten are opened. */
+const LIST_OPENER = /^\s*const ([A-Za-z_][A-Za-z0-9_]*) = \[\s*$/
+/** One quoted element on its own line. */
+const LIST_ELEMENT = /^\s*'([^']*)',\s*$/
+/**
+ * The closing bracket, and what follows it is not read.
+ *
+ * Three of the ten close `].map((name) => join(ROOT, ...))` rather than with a
+ * bare `]`, and a closer anchored to the end of the line finds seven of ten and
+ * reports no violations -- which is the exact failure this rule exists to end,
+ * and it is what the first draft of this collector did.
+ */
+const LIST_CLOSER = /^\s*\]/
+
+/**
+ * The migration lists one file declares, in source order.
+ *
+ * Keyed on what an array holds rather than on what it is called. The ten in this
+ * tree are written under three constant names and at two indents, so a collector
+ * keyed on either finds a subset; an array every element of which is a migration
+ * filename is a migration list whatever it is called and wherever it sits.
+ *
+ * An array holding anything else is not one, which is what keeps a list of table
+ * names out, and a migration named on its own -- `menu.test.ts` applies one file
+ * by name inside a condition -- is not in an array at all.
+ */
+function listsIn(path: string, text: string): MigrationList[] {
+  const found: MigrationList[] = []
+  let open: { line: number; name: string; files: string[]; only: boolean } | null = null
+
+  for (const [index, line] of text.split('\n').entries()) {
+    if (open === null) {
+      const name = LIST_OPENER.exec(line)?.[1]
+      if (name !== undefined) open = { line: index + 1, name, files: [], only: true }
+      continue
+    }
+
+    if (LIST_CLOSER.test(line)) {
+      // An empty array is not collected, so a list emptied rather than removed
+      // stops being a subject. Nothing here can see that; the census conditions
+      // in the suite are what do, and ADR 0035 records the division.
+      if (open.only && open.files.length > 0) {
+        found.push({ path, line: open.line, name: open.name, files: open.files })
+      }
+      open = null
+      continue
+    }
+
+    const said = LIST_ELEMENT.exec(line)?.[1]
+    if (said !== undefined && MIGRATION_FILENAME.test(said)) open.files.push(said)
+    else open.only = false
+  }
+
+  return found
+}
+
+/**
+ * Every feature suite's lists, and every feature suite that applies migrations.
+ *
+ * One walk for both, over the directories `readFeatures` already enumerates, so
+ * that what counts as a slice's test is decided in one place. A list written
+ * outside a feature directory is invisible, which is the same shape of limit
+ * `RESTATING_PATHS` carries and is recorded with it.
+ */
+function readMigrationSuites(root: string): { lists: MigrationList[]; appliers: string[] } {
+  const lists: MigrationList[] = []
+  const appliers: string[] = []
+
+  for (const area of AREAS) {
+    for (const workspace of names(join(root, area), 'directory')) {
+      const features = join(root, area, workspace, 'src', 'features')
+      for (const feature of names(features, 'directory')) {
+        for (const file of names(join(features, feature), 'file')) {
+          if (!file.endsWith(TEST_SUFFIX)) continue
+
+          let text: string
+          try {
+            text = readFileSync(join(features, feature, file), 'utf8')
+          } catch {
+            continue
+          }
+
+          const path = `${area}/${workspace}/src/features/${feature}/${file}`
+          if (text.includes(APPLIES_MIGRATIONS)) appliers.push(path)
+          lists.push(...listsIn(path, text))
+        }
+      }
+    }
+  }
+
+  return { lists, appliers }
+}
+
+function readMigrationDirectory(root: string): string[] {
+  return names(join(root, ...MIGRATION_SOURCE), 'file').filter((name) =>
+    MIGRATION_FILENAME.test(name),
+  )
+}
+
 export function collectInput(root: string, requireHistory: boolean): ConventionInput {
   let readme: string | null
   try {
@@ -1000,6 +1221,10 @@ export function collectInput(root: string, requireHistory: boolean): ConventionI
         .map((line) => line.trim())
         .filter((line) => line.length > 0)
 
+  // One walk, because the lists and the files that apply them come from the same
+  // pass over the same directories.
+  const suites = readMigrationSuites(root)
+
   // An untracked README.md is not a modified one. It has neither a staged nor
   // an unstaged change, because there is no committed version to differ from,
   // and treating git's `??` as dirt would report the wrong reason for not
@@ -1020,6 +1245,9 @@ export function collectInput(root: string, requireHistory: boolean): ConventionI
     runStepCommands: readRunStepCommands(readme),
     openWindow: readWindow(root),
     windowMentions: readWindowMentions(root),
+    migrationDirectory: readMigrationDirectory(root),
+    migrationLists: suites.lists,
+    migrationAppliers: suites.appliers,
     requireHistory,
   }
 }

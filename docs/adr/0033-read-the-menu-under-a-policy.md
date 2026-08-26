@@ -190,3 +190,19 @@ grant as well.
 carry a list today and a program could compare each against the migrations
 directory, but that program is deferred to `0006`. Until then a new suite can be
 written with a short list and nothing goes red.
+
+The convention rule this record deferred lands in
+[ADR 0035](0035-check-a-suites-migration-list-against-the-directory.md). What was
+deferred was written here as "**A convention rule enforcing the full-prefix rule
+now.** … Its trigger is named instead: **the next migration**, `0006`, which is
+the first chance for the rule to be broken by a new list rather than by an old
+one." That trigger fired in ADR 0034 and the rule is the commit after it.
+
+Two things there differ from what this record predicted. The subjects are **ten and
+not seven**: three suites carry a `.down.sql` list beside the up list, which this
+record did not count, and the rule covers both directions because the down lists
+were the three nothing held. And the sentence above — "Seven suites carry a list
+today and a program could compare each against the migrations directory" — is true
+of the comparison and understates the collector: the ten lists are written under
+three constant names, close two different ways and sit at two indents, so the
+program had to be keyed on what an array holds rather than on what it is called.

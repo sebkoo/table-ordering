@@ -171,3 +171,19 @@ residue is what the deferred rule is for.
 reddens no condition in the tree, because such a predicate agrees with the policy
 in every state including the unscoped one where both raise. README already
 records this and this change does not narrow it.
+
+The rule this record named its successor for lands in
+[ADR 0035](0035-check-a-suites-migration-list-against-the-directory.md). What was
+promised was written here as: "The rule is still not here, and the successor is a
+commit rather than a condition: **it is the next commit.** A condition can be
+argued with; 'the next commit' can only be kept or visibly broken." That is the
+commit after this one, and the promise is kept.
+
+The residue this record measured is what set the rule's scope. "Five of the seven
+up lists are held by a condition and two … are held by review alone. The down lists
+themselves are held by nothing" — so the rule covers both directions rather than
+the up lists alone, and all ten are now held by a condition rather than by review.
+The verdict-line count this record predicted moved as predicted, fifteen to
+sixteen, and nothing in the tree restated the old number: `check-push` computes it
+at run time, and the two logs its suite carries are captures read against the step
+list of their own era.

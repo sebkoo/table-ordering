@@ -7,9 +7,10 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import {
   type Commit,
@@ -20,7 +21,9 @@ import {
   featureHasTestRule,
   formatReports,
   hasFailure,
+  type MigrationList,
   migrationHasDownRule,
+  migrationListFullPrefixRule,
   openWindowRestatedRule,
   type Rule,
   type RunStepCommand,
@@ -32,6 +35,35 @@ import {
 } from '../check-conventions.ts'
 
 const IDENTITY = 'committer@example.test'
+
+/** This repository, two levels up from `tools/__tests__`. */
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+
+/**
+ * A three-migration sequence, as `collectInput` reads a directory: every file,
+ * ascending. An up list is the `.up.sql` half of it in that order and a down list
+ * is the `.down.sql` half reversed, which is what a down sequence has to be.
+ */
+const DIRECTORY = [
+  '0001-create-menu.down.sql',
+  '0001-create-menu.up.sql',
+  '0002-create-restaurant-table.down.sql',
+  '0002-create-restaurant-table.up.sql',
+  '0003-create-table-order.down.sql',
+  '0003-create-table-order.up.sql',
+]
+const WHOLE_UP = [
+  '0001-create-menu.up.sql',
+  '0002-create-restaurant-table.up.sql',
+  '0003-create-table-order.up.sql',
+]
+const WHOLE_DOWN = [
+  '0003-create-table-order.down.sql',
+  '0002-create-restaurant-table.down.sql',
+  '0001-create-menu.down.sql',
+]
+
+const SUITE = 'services/api/src/features/menu/menu.test.ts'
 
 const WORKFLOW_WITH_BOUND = `name: CI
 
@@ -67,6 +99,11 @@ function input(overrides: Partial<ConventionInput> = {}): ConventionInput {
     runStepCommands: [{ line: 12, text: 'psql -U u -d d --single-transaction < 0001.up.sql' }],
     openWindow: '2 hours',
     windowMentions: [{ path: 'README.md', line: 113, text: 'two hours' }],
+    migrationDirectory: ['0001-create-menu.down.sql', '0001-create-menu.up.sql'],
+    migrationLists: [
+      { path: SUITE, line: 75, name: 'MIGRATION_FILES', files: ['0001-create-menu.up.sql'] },
+    ],
+    migrationAppliers: [SUITE],
     requireHistory: false,
     ...overrides,
   }
@@ -251,20 +288,20 @@ describe('the report', () => {
   // so they are null together or not at all, and an unborn repository's README
   // is untracked rather than modified. The file rules read the working tree, so
   // they evaluate before the first commit.
-  it('summarises a repository with no commits as two skips and five passes', () => {
+  it('summarises a repository with no commits as two skips and six passes', () => {
     const reports = runRules(
       createRules(input({ commits: null, readmeCommitDates: null, readmeDirty: false })),
     )
     const text = formatReports(reports)
-    expect(text).toContain('7 checks: 5 PASS, 0 FAIL, 2 SKIP')
+    expect(text).toContain('8 checks: 6 PASS, 0 FAIL, 2 SKIP')
     expect(text).toContain('readme-status-date')
     expect(text).toContain('commit-message-policy')
     expect(hasFailure(reports)).toBe(false)
   })
 
-  it('summarises a clean committed tree as seven passes', () => {
+  it('summarises a clean committed tree as eight passes', () => {
     const reports = runRules(createRules(input({ requireHistory: true })))
-    expect(formatReports(reports)).toContain('7 checks: 7 PASS, 0 FAIL, 0 SKIP')
+    expect(formatReports(reports)).toContain('8 checks: 8 PASS, 0 FAIL, 0 SKIP')
     expect(hasFailure(reports)).toBe(false)
   })
 
@@ -279,7 +316,7 @@ describe('the report', () => {
     }
   })
 
-  it('ships exactly the seven rules', () => {
+  it('ships exactly the eight rules', () => {
     expect(createRules(input()).map((rule) => rule.name)).toEqual([
       'readme-status-date',
       'commit-message-policy',
@@ -288,6 +325,7 @@ describe('the report', () => {
       'workflow-job-timeout',
       'run-step-single-transaction',
       'open-window-restated',
+      'migration-list-full-prefix',
     ])
   })
 })
@@ -604,16 +642,32 @@ psql -U u -d d --single-transaction < 0001.up.sql
 
 const BOOTSTRAP_SQL = "export const OPEN_WINDOW = '2 hours'\n"
 
+/**
+ * A suite that applies the fixture's one migration. Without it the list rule has
+ * no subject in this repository and fails as vacuous, and the verdict arrays
+ * below stop being about history -- the same reason the run step and the window
+ * had to be real above.
+ */
+const BOOTSTRAP_SUITE = `const MIGRATIONS = join(here, 'services', 'api', 'migrations')
+const MIGRATION_FILES = [
+  '0001-create-menu.up.sql',
+]
+`
+
 describe('an unborn repository whose README.md is untracked', () => {
   /** A fresh clone before its first commit: files on disk, nothing in history. */
   function bootstrapRepo(): string {
     const dir = newRepo()
     writeFileSync(join(dir, 'README.md'), BOOTSTRAP_README, 'utf8')
     mkdirSync(join(dir, 'services', 'api', 'migrations'), { recursive: true })
-    writeFileSync(join(dir, 'services', 'api', 'migrations', '1.up.sql'), 'create table x ();\n')
-    writeFileSync(join(dir, 'services', 'api', 'migrations', '1.down.sql'), 'drop table x;\n')
+    const migrations = join(dir, 'services', 'api', 'migrations')
+    writeFileSync(join(migrations, '0001-create-menu.up.sql'), 'create table x ();\n')
+    writeFileSync(join(migrations, '0001-create-menu.down.sql'), 'drop table x;\n')
     mkdirSync(join(dir, 'services', 'api', 'src', 'features', 'menu'), { recursive: true })
-    writeFileSync(join(dir, 'services', 'api', 'src', 'features', 'menu', 'menu.test.ts'), '')
+    writeFileSync(
+      join(dir, 'services', 'api', 'src', 'features', 'menu', 'menu.test.ts'),
+      BOOTSTRAP_SUITE,
+    )
     mkdirSync(join(dir, 'services', 'api', 'src', 'features', 'order'), { recursive: true })
     writeFileSync(join(dir, 'services', 'api', 'src', 'features', 'order', 'sql.ts'), BOOTSTRAP_SQL)
     // A slice is a slice to `feature-has-test` too, so the directory the window
@@ -640,6 +694,7 @@ describe('an unborn repository whose README.md is untracked', () => {
       'PASS',
       'PASS',
       'PASS',
+      'PASS',
     ])
     const readme = reports[0]?.outcome
     expect(readme?.status).toBe('skip')
@@ -653,6 +708,7 @@ describe('an unborn repository whose README.md is untracked', () => {
     expect(reports.map((report) => report.verdict)).toEqual([
       'FAIL',
       'FAIL',
+      'PASS',
       'PASS',
       'PASS',
       'PASS',
@@ -1262,5 +1318,299 @@ describe('the window a repository restates', () => {
       { path: 'README.md', line: 3, text: 'two hours' },
       { path: PAGE, line: 2, text: 'two hours' },
     ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The rule is driven from values, and the collector against real directories,
+ * for the reason the file rules above already are: a rule about files that is
+ * only ever shown an object literal is a rule about object literals.
+ *
+ * The two conditions at the end of this block read this repository itself. They
+ * are the census, and they are what stops the rule losing a subject quietly --
+ * the defect it exists to police, one level up. They use two instruments with
+ * different keys, and neither compares itself against the other, so a collector
+ * that goes blind reddens one of them and leaves the other green.
+ */
+describe('migration-list-full-prefix', () => {
+  function listed(files: string[], name = 'MIGRATION_FILES'): MigrationList {
+    return { path: SUITE, line: 40, name, files }
+  }
+
+  function withLists(lists: MigrationList[], appliers: string[] = [SUITE]): Rule {
+    return migrationListFullPrefixRule(
+      input({ migrationDirectory: DIRECTORY, migrationLists: lists, migrationAppliers: appliers }),
+    )
+  }
+
+  const WHERE = `${SUITE} line 40 (MIGRATION_FILES)`
+
+  function difference(declares: string[], migrations: string[]): string {
+    return `declares:   ${declares.join(', ')}\n        migrations: ${migrations.join(', ')}`
+  }
+
+  it('passes a suite whose up list and down list are both the whole sequence', () => {
+    const outcome = withLists([listed(WHOLE_UP), listed(WHOLE_DOWN, 'DOWN_FILES')]).check()
+    expect(outcome).toEqual({ status: 'pass', subjects: 2 })
+  })
+
+  // B. The failure this rule exists for: a list written when the sequence was
+  // shorter, against a schema that exists nowhere.
+  it('fails an up list that stops short of the newest migration, naming the list', () => {
+    const outcome = withLists([
+      listed(['0001-create-menu.up.sql', '0002-create-restaurant-table.up.sql']),
+    ]).check()
+
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+    expect(outcome.violations).toEqual([
+      {
+        where: WHERE,
+        detail: difference(
+          ['0001-create-menu.up.sql', '0002-create-restaurant-table.up.sql'],
+          WHOLE_UP,
+        ),
+      },
+    ])
+  })
+
+  // C. Order and not membership. A list naming every migration in the wrong
+  // order applies `0003` before `0002`, which a set comparison calls whole.
+  it('fails an up list that names every migration in the wrong order', () => {
+    const outcome = withLists([
+      listed([
+        '0002-create-restaurant-table.up.sql',
+        '0001-create-menu.up.sql',
+        '0003-create-table-order.up.sql',
+      ]),
+    ]).check()
+
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+    expect(outcome.violations[0]?.detail).toBe(
+      difference(
+        [
+          '0002-create-restaurant-table.up.sql',
+          '0001-create-menu.up.sql',
+          '0003-create-table-order.up.sql',
+        ],
+        WHOLE_UP,
+      ),
+    )
+  })
+
+  // D. The other direction, which is not the same assertion: a down sequence
+  // runs newest first, so the directory's order is the wrong one for it.
+  it('fails a down list written in the up order', () => {
+    const ascending = [...WHOLE_DOWN].reverse()
+    const outcome = withLists([listed(ascending, 'DOWN_FILES')]).check()
+
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+    expect(outcome.violations).toEqual([
+      {
+        where: `${SUITE} line 40 (DOWN_FILES)`,
+        detail: difference(ascending, WHOLE_DOWN),
+      },
+    ])
+  })
+
+  // E. A list can be wrong by naming too much as well as too little.
+  it('fails a list naming a migration the directory does not hold', () => {
+    const phantom = [...WHOLE_UP, '0007-add-a-sitting.up.sql']
+    const outcome = withLists([listed(phantom)]).check()
+
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+    expect(outcome.violations[0]?.detail).toBe(difference(phantom, WHOLE_UP))
+  })
+
+  // F. The vacuity contract. A collector that stopped recognising every list
+  // would otherwise report a rule that found nothing wrong.
+  it('fails as vacuous when no suite carries a list at all', () => {
+    const report = runRules([withLists([], [])])[0]
+    expect(report?.verdict).toBe('FAIL')
+    expect(report?.vacuous).toBe(true)
+  })
+
+  // G, fixture half. The second selector: a file that applies migrations and
+  // yields no list this rule can read is a list gone quiet, not a file with
+  // nothing wrong.
+  it('fails a file that applies migrations and yields no list it can read', () => {
+    const other = 'services/api/src/features/order/order.test.ts'
+    const outcome = withLists([listed(WHOLE_UP)], [SUITE, other]).check()
+
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+    expect(outcome.subjects).toBe(1)
+    expect(outcome.violations).toEqual([
+      {
+        where: other,
+        detail: 'names the migrations directory and carries no migration list this rule can read',
+      },
+    ])
+  })
+})
+
+describe('the migration lists a repository carries', () => {
+  function repoWithSuites(files: Record<string, string>): ConventionInput {
+    const dir = newRepo()
+    const migrations = join(dir, 'services', 'api', 'migrations')
+    mkdirSync(migrations, { recursive: true })
+    for (const name of DIRECTORY) writeFileSync(join(migrations, name), '-- x\n', 'utf8')
+
+    for (const [path, body] of Object.entries(files)) {
+      const full = join(dir, ...path.split('/'))
+      mkdirSync(dirname(full), { recursive: true })
+      writeFileSync(full, body, 'utf8')
+    }
+    return collectInput(dir, false)
+  }
+
+  const ELEMENTS = WHOLE_UP.map((name) => `  '${name}',`).join('\n')
+  const DOWN_ELEMENTS = WHOLE_DOWN.map((name) => `    '${name}',`).join('\n')
+
+  const BARE = `const MIGRATION_FILES = [\n${ELEMENTS}\n]\n`
+  const MAPPED = `const MIGRATIONS = [\n${ELEMENTS}\n].map((name) => join(ROOT, 'services', 'api', 'migrations', name))\n`
+  const INDENTED = `describe('the down migration', () => {\n  const DOWN_FILES = [\n${DOWN_ELEMENTS}\n  ]\n})\n`
+
+  const A = 'apps/guest/src/features/menu/menu.browser.test.ts'
+  const S = 'services/api/src/features/menu/menu.test.ts'
+
+  // H. The fixture guard, and the failure that produced this rule's own census
+  // wrong the first time: three of the ten lists close `].map(...)` rather than
+  // with a bare `]`, and a reader keyed on the closer finds seven and says
+  // nothing. Two of the three shapes here would be invisible to it.
+  it('reads a list closing with a map, one closing bare, and one indented alike', () => {
+    const collected = repoWithSuites({ [A]: MAPPED, [S]: `${BARE}\n${INDENTED}` })
+
+    expect(
+      collected.migrationLists.map((list) => `${list.path} ${list.name} ${list.files.length}`),
+    ).toEqual([`${A} MIGRATIONS 3`, `${S} MIGRATION_FILES 3`, `${S} DOWN_FILES 3`])
+    expect(runRules([migrationListFullPrefixRule(collected)])[0]?.verdict).toBe('PASS')
+  })
+
+  it('reports the line each list begins on, which is the line to edit', () => {
+    const collected = repoWithSuites({ [S]: `// a comment\n\n${BARE}` })
+    expect(collected.migrationLists.map((list) => list.line)).toEqual([3])
+  })
+
+  // I. An array is not a migration list because it is an array, and a migration
+  // named on its own is not a list at all -- `menu.test.ts` applies one file by
+  // name inside a condition, and a reader scanning for filenames takes it.
+  it('reads neither an array of something else nor a migration named on its own', () => {
+    const collected = repoWithSuites({
+      [S]:
+        `const TABLES = [\n  'restaurant',\n  'menu_item',\n]\n\n` +
+        `await scratch.query(migration('0002-create-restaurant-table.up.sql'))\n` +
+        `const MIGRATIONS = join(here, 'migrations')\n`,
+    })
+
+    expect(collected.migrationLists).toEqual([])
+    expect(collected.migrationAppliers).toEqual([S])
+  })
+
+  it('names a file that applies migrations, and no file that does not', () => {
+    const collected = repoWithSuites({
+      [S]: `const MIGRATIONS = join(here, 'services', 'api', 'migrations')\n${BARE}`,
+      [A]: `const NOTHING = 1\n`,
+    })
+    expect(collected.migrationAppliers).toEqual([S])
+  })
+
+  it('reads the whole migration directory, both directions, ascending', () => {
+    expect(repoWithSuites({ [S]: BARE }).migrationDirectory).toEqual(DIRECTORY)
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The census, over this repository rather than over a fixture.
+ *
+ * Two conditions and two instruments. The first runs the collector the rule
+ * runs; the second parses no array structure at all, and counts head elements
+ * the directory supplies. Neither compares itself with the other, which is what
+ * makes them separable by observation: a collector blind to a shape reddens the
+ * first and leaves the second green, and a head moved onto its opener line does
+ * the reverse. Their blindness runs in opposite directions, which is the whole
+ * reason both are here.
+ *
+ * Sites are named rather than counted, so an eleventh list says which one it is
+ * instead of moving a number.
+ */
+describe('the migration lists this repository carries', () => {
+  /** Every `*.test.ts` under the two workspace areas, walked rather than collected. */
+  function testFilesUnder(root: string): string[] {
+    const found: string[] = []
+
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name)
+        if (entry.isDirectory()) walk(full)
+        else if (entry.name.endsWith('.test.ts')) found.push(full)
+      }
+    }
+
+    for (const area of ['apps', 'services']) walk(join(root, area))
+    return found.sort()
+  }
+
+  /**
+   * How many lists begin, counted by their head element alone.
+   *
+   * The head of an up list is the directory's first `.up.sql` ascending and the
+   * head of a down list is its last `.down.sql`, because a down list is the
+   * reverse. Both come from the directory, so this restates no filename.
+   */
+  function headCounts(root: string): { up: number; down: number } {
+    const migrations = readdirSync(join(root, 'services', 'api', 'migrations')).sort()
+    const upHead = migrations.filter((name) => name.endsWith('.up.sql'))[0] ?? ''
+    const downHead = migrations.filter((name) => name.endsWith('.down.sql')).at(-1) ?? ''
+    const counts = { up: 0, down: 0 }
+
+    for (const file of testFilesUnder(root)) {
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        const said = line.trim()
+        if (said === `'${upHead}',`) counts.up++
+        if (said === `'${downHead}',`) counts.down++
+      }
+    }
+
+    return counts
+  }
+
+  // A. The collector's census, by site.
+  it('finds ten lists, at the ten sites this tree carries', () => {
+    const lists = collectInput(ROOT, false).migrationLists
+
+    expect(lists.map((list) => `${list.path} ${list.name}`)).toEqual([
+      'apps/guest/src/features/menu/menu.browser.test.ts MIGRATIONS',
+      'apps/guest/src/features/order/order.browser.test.ts MIGRATIONS',
+      'apps/staff/src/features/staff/staff.browser.test.ts MIGRATIONS',
+      'services/api/src/features/menu/menu.test.ts MIGRATION_FILES',
+      'services/api/src/features/menu/menu.test.ts DOWN_FILES',
+      'services/api/src/features/order/order.test.ts MIGRATION_FILES',
+      'services/api/src/features/order/order.test.ts DOWN_FILES',
+      'services/api/src/features/staff/board.test.ts MIGRATION_FILES',
+      'services/api/src/features/staff/staff.test.ts MIGRATION_FILES',
+      'services/api/src/features/staff/staff.test.ts DOWN_FILES',
+    ])
+  })
+
+  // A'. The same census by a different key, which never looks at an array.
+  it('counts the same ten by their head element, parsing no array at all', () => {
+    expect(headCounts(ROOT)).toEqual({ up: 7, down: 3 })
+  })
+
+  // G, root half. What the rule says about this tree, so that a file losing its
+  // only list moves a verdict inside this suite rather than only in a live run.
+  it('passes over this tree, at ten subjects and no violations', () => {
+    expect(migrationListFullPrefixRule(collectInput(ROOT, false)).check()).toEqual({
+      status: 'pass',
+      subjects: 10,
+    })
   })
 })

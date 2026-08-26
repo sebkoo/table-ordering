@@ -122,6 +122,11 @@ that creates the thing it governs.
 - A picture of a page in this repository's documents is a capture: taken from
   the product this repository builds, stored here rather than fetched from
   anywhere else, and captioned with the revision it was taken at.
+- A test suite applies the whole migration sequence and never the subset it
+  reaches: its list is `services/api/migrations` itself, every `*.up.sql` in order
+  and every `*.down.sql` in the reverse. A list a check cannot read is a list that
+  is not there, so a suite that applies migrations and carries none it can read is
+  named rather than counted as compliant.
 - A write that sets one column is granted one column. The application role holds
   `update` on exactly the column the act records and on no other, so a statement
   naming another is refused by the privilege rather than by review, and the
