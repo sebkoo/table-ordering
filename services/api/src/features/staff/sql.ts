@@ -124,8 +124,19 @@ export type SessionRow = {
  *
  * The window is the guest read's `OPEN_WINDOW`, imported rather than restated.
  * A second constant for the same idea is the drift ADR 0028 exists to prevent.
- * "Open" means recent, here as there: no column records that an order has been
- * served, and nothing can write one until staff can act rather than only look.
+ *
+ * "Open" is now two clauses here and one on the guest's read, and that is a
+ * decision rather than an oversight. A guest is asking whether their round
+ * reached the kitchen, and the answer stays yes after the kitchen has cooked it;
+ * a kitchen is asking what is still outstanding, and there the same row has to
+ * go. One constant still bounds both, because the two bounds have not needed
+ * different values -- what separates them is written down in ADR 0034 rather
+ * than guessed at now.
+ *
+ * `served_at is null` rather than a window on the act: the window bounds what a
+ * read discloses, not what a write may record. A ticket that aged off this board
+ * unserved can still be cleared, and {@link MARK_SERVED} is deliberately without
+ * a window for that reason.
  *
  * `restaurant_table` carries no policy and cannot -- it is what a printed code is
  * resolved through -- so its join scopes itself, against `o.restaurant_id`, which
@@ -157,6 +168,7 @@ export const OPEN_ORDERS_IN_RESTAURANT = `
     on item.id = line.menu_item_id
    and item.restaurant_id = line.restaurant_id
   where o.placed_at > now() - $1::interval
+    and o.served_at is null
   order by o.placed_at, o.id, item.sort_order, item.name
 `
 
@@ -166,4 +178,45 @@ export type BoardRow = {
   table_label: string
   quantity: number | null
   item_name: string | null
+}
+
+/**
+ * The act: the moment a ticket was served, recorded once.
+ *
+ * `and served_at is null` is what makes a repeat write nothing. Without it a
+ * second act would move the moment, which is the difference between "this was
+ * served at 19:40" and "somebody pressed this at 19:52".
+ *
+ * No restaurant, and no window. The restaurant is the policy's job, as it is for
+ * every statement in this file. The window is deliberately absent: it bounds
+ * what a read discloses, not what a write may record, and a ticket that aged off
+ * the board unserved is the forgotten ticket -- recording that it was served
+ * records something true. ADR 0034.
+ */
+export const MARK_SERVED = `
+  update table_order set served_at = now()
+  where id = $1 and served_at is null
+  returning id
+`
+
+/**
+ * The order an id names, when {@link MARK_SERVED} reached no row.
+ *
+ * Two things reach no row, and only this tells them apart: an order already
+ * served, which is a repeat, and an order this transaction's scope cannot see,
+ * which is another restaurant's or nobody's. It names no restaurant -- the
+ * policy is what makes the second of those invisible, and it makes it invisible
+ * in exactly the same way for an id that was never minted.
+ *
+ * The shape is `CLAIM_ORDER` followed by `ORDER_FOR_SUBMISSION` in the order
+ * slice: claim, and read back what the claim collided with.
+ */
+export const ORDER_IN_RESTAURANT = `
+  select id, served_at from table_order where id = $1
+`
+
+/** One row of {@link ORDER_IN_RESTAURANT}. `served_at` is null on an order nobody has cleared. */
+export type ServedRow = {
+  id: string
+  served_at: Date | null
 }

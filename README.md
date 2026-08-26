@@ -8,8 +8,9 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-26 · a member of staff signs in on a page of their own and
-reads every open order in their restaurant, and no other restaurant's.
+**Status:** 2026-08-26 · a member of staff signs in on a page of their own,
+reads every open order in their restaurant, and clears a ticket from the board
+when the kitchen has served it.
 
 ## What it looks like
 
@@ -272,9 +273,41 @@ It carries the table's label and never the table's code. The code is what a gues
 orders with; the board has no reader for it, and a value that authorises a write
 does not travel where nothing reads it.
 
-Open here means what it means to a guest: recent, not unserved. Nothing records
-that an order has been made, and nothing can until staff can act on one rather
-than only look at it.
+Open here means recent **and not yet served**. That second half is what the
+kitchen presses:
+
+```
+POST /staff/orders/1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed/served
+authorization: Bearer …
+```
+
+```
+204
+```
+
+No body going in and no body coming back. There is nothing a caller may say
+about the act beyond which ticket it is for — an address that took a field would
+be one that could take `false`, and putting a ticket *back* on a board is a
+different question nobody has asked yet. The ticket leaves the board, and the
+order records the moment it went.
+
+Press it twice and the second answer is the first answer, byte for byte, and the
+recorded moment does not move. Two kitchen screens showing one ticket is the
+ordinary case, and the second person to press should not be shown an error for
+something that did happen — the same reasoning that makes a resent order one
+order.
+
+A ticket in another restaurant, and an id no order ever carried, are refused
+`404` **with the same body**. That is the point rather than a tidiness: a message
+naming the id would tell a caller that a ticket they cannot see exists somewhere.
+Which restaurant a session may clear in is not in the request and cannot be
+([ADR 0034](docs/adr/0034-clear-a-ticket-by-recording-when-it-was-served.md)).
+
+The guest's own list is deliberately unchanged. A guest is asking whether their
+round reached the kitchen, and that stays true after the kitchen has cooked it;
+a page that emptied itself the moment a ticket was picked up would send the one
+guest most likely to act on it to order the same round again. So "open" names two
+questions of the same rows, and one window still bounds both.
 
 **And the board is a page.** Staff open a page of their own and sign in:
 
@@ -306,8 +339,18 @@ instead, and the session survives. And a restaurant with nothing open says so in
 its own sentence — an empty board is a fact about a restaurant, and the other
 three are the page not knowing.
 
-It asks once, when a session opens. An order placed after that appears the next
-time somebody signs in, for the reason the guest's list does not poll either.
+Each row carries the control that clears it. Pressing it sends the request above
+and then asks the board again, so the ticket leaves because the server says it
+has rather than because the page struck the row out — a list the page edited
+would be a second account of the queue, and the two would drift the first time an
+act half succeeded. An act that does not land says so and leaves the board
+readable, because blanking it would tell a kitchen its other tickets were gone on
+the strength of one button. An act refused with a `401` is the session ending and
+sends staff back to the form, exactly as a refused read does.
+
+It asks when a session opens, and again when an act from that page lands. An
+order placed in between appears at the next act or the next sign-in, for the
+reason the guest's list does not poll either.
 
 That page asks for nothing but its own origin, and a browser is what says so —
 the same condition the guest's page carries, now written as an invariant about
@@ -319,6 +362,7 @@ any page this repository serves rather than about one of them.
    another phone at the same table appears without anyone reloading.
 2. The board will keep itself current the same way, and will say how long a
    ticket has waited — the field for that is deliberately not on the answer yet.
+3. Payment, as an option a restaurant turns on rather than a requirement.
 
 ## How a menu request is served
 
@@ -408,6 +452,21 @@ policies, so the `using` clause is what scopes the read. It is the first read
 here that a policy scopes, and it needed no migration — the tables were already
 enabled and the application role already held `select`.
 
+Clearing a ticket is that shape again with a staff session in place of a printed
+code: resolve the session, set the scope from the row it resolved to, then update
+a statement that names no restaurant. `for all` covers an update as well as a
+read, so the policy that scopes the board is already the policy that scopes the
+act, and `0006` writes none. What `0006` does write is a **column grant**:
+
+```sql
+grant update (served_at) on table_order to table_ordering_app;
+```
+
+so the application role can record that a ticket went out and still cannot move
+an order to another table, re-time it, or delete it. A statement naming any other
+column is refused by the privilege before a policy is consulted — which is what
+makes the refusal hold for a statement nobody reviewed.
+
 ## Why
 
 Every table-ordering product I looked at wanted a percentage of card volume, a
@@ -438,7 +497,7 @@ it is started.
 | The restaurant's open orders, read under a staff session | Done |
 | The board on a page staff sign in to | Done |
 | Row-level security on a read, so a menu query drops its scope too | Done |
-| A kitchen board a ticket can be acted on from | Planned |
+| A kitchen board a ticket can be acted on from | Done |
 | Payment, as an option rather than a requirement | Planned |
 
 ## Run it
@@ -597,6 +656,26 @@ curl -s localhost:3000/staff/orders -H 'authorization: Bearer THE TOKEN'
 ```json
 {"orders":[{"id":"1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed","table":{"label":"Table 7"},"lines":[{"name":"Flat white","quantity":2}]}]}
 ```
+
+Clear that ticket, taking the id out of what the board just answered:
+
+```sh
+ticket=$(curl -s localhost:3000/staff/orders -H 'authorization: Bearer THE TOKEN' \
+  | sed 's/.*"orders":\[{"id":"\([^"]*\)".*/\1/')
+
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  localhost:3000/staff/orders/$ticket/served -H 'authorization: Bearer THE TOKEN'
+```
+
+```
+204
+```
+
+There is no body to print, which is why that reads the status code. Run it again
+with the same `$ticket` and it answers `204` again and records nothing further.
+Ask for the board once more and the ticket is gone, while
+`curl -s localhost:3000/tables/9f3c1a7b20de/orders` still shows the guest the
+round they sent.
 
 The page a guest opens is a second process in development:
 
@@ -776,6 +855,7 @@ each with the alternatives that were rejected and why.
 - [0031 Show the board on a page staff sign in to, and hold the token in memory alone](docs/adr/0031-show-the-board-on-a-page-staff-sign-in-to.md)
 - [0032 Show both pages in the README as dated captures, and defer the check that would hold them](docs/adr/0032-show-both-pages-as-dated-captures.md)
 - [0033 Read the menu under a policy, and split the resolve from the read](docs/adr/0033-read-the-menu-under-a-policy.md)
+- [0034 Clear a ticket by recording when it was served, and leave the guest's list alone](docs/adr/0034-clear-a-ticket-by-recording-when-it-was-served.md)
 
 ## Known limitations
 
@@ -808,9 +888,20 @@ each with the alternatives that were rejected and why.
   previous party's order. No window closes that, because parties can be minutes
   apart; the row that would is deferred to the first view that can close a
   table.
-- The read carries no price, because an order records none. It carries no notion
-  of an order being served either: "open" means recent, not unfulfilled, and a
-  status column has no writer until staff have a client.
+- The read carries no price, because an order records none. It does now record
+  that an order was served, and only the board's read acts on it: for a guest
+  "open" still means recent, so a round the kitchen has cooked is still on their
+  page. That is deliberate, and the alternative is rejected out loud in
+  [ADR 0034](docs/adr/0034-clear-a-ticket-by-recording-when-it-was-served.md).
+- A ticket cannot be put back on the board. There is no un-serve: it would need a
+  reason a ticket returns, and nobody has one yet. The row keeps the moment it
+  was cleared, so the repair is a new decision rather than a lost fact.
+- Nothing records *who* cleared a ticket. The session resolves a staff row, so
+  the value is in hand and is not written, because no view shows it and a column
+  with no reader is one every later change has to keep true.
+- There is no way to clear more than one ticket at a time. Nothing is deployed,
+  so no kitchen has said its board is long enough to want one, and a bulk control
+  is the one act here with no undo.
 - The guest's page shows the table's orders as of the last time it asked, and it
   asks when the page opens and when a send from it lands. A round sent from
   another phone at the same table does not appear until this page sends or is
@@ -826,6 +917,11 @@ each with the alternatives that were rejected and why.
   word it does not carry. The records in `docs/adr/` are outside it on purpose:
   each states what was decided on its date, and a decision that moves is
   superseded rather than rewritten.
+- The board's picture was taken before the control existed and shows no way to
+  clear a ticket. Its caption names the revision it was taken at, which is what
+  makes it a record of that revision rather than a claim about this one; a
+  recapture made here could not be captioned honestly at all, because its pixels
+  would come from code with no revision until the commit exists.
 - The pictures at the top of this file are held by nothing executable. Each one
   names the revision it was taken at, and no program compares a picture with the
   page it shows, or a caption's revision with what that revision renders. The
@@ -864,10 +960,11 @@ each with the alternatives that were rejected and why.
   in is memory-hard by design, so each one asks the API for about a third of a
   second of CPU. That is the cost of the storage decision rather than an
   oversight, and ADR 0031 names the fact that would reverse it.
-- The board asks once, when a session opens. An order placed after that is not on
-  the screen until somebody signs in again, and nothing on the page says how old
-  the list is. It is the guest list's limitation with a worse consequence: a
-  kitchen is the reader who most needs a current one.
+- The board asks when a session opens and when an act from that page lands. An
+  order placed between those is not on the screen until the next act or the next
+  sign-in, and nothing on the page says how old the list is. It is the guest
+  list's limitation with a worse consequence: a kitchen is the reader who most
+  needs a current one.
 - The board's page states no window at all, and `open-window-restated` does not
   read that workspace. A duration written into it would be invisible to the rule
   rather than checked by it, which is why none is written.
@@ -886,10 +983,16 @@ each with the alternatives that were rejected and why.
   field lands with the first view that shows the waiting.
 - One constant bounds two different disclosures. The guest's read is bounded
   because a printed code is public and cannot be revoked; the board's is bounded
-  because a kitchen wants what is outstanding rather than a history. They are one
-  value today, and they separate the first time an order can be marked served.
+  because a kitchen wants what is outstanding rather than a history. An order can
+  be marked served now, which is where this line used to say they would separate
+  — and they have not, because the two bounds have not needed different values.
+  They separate with the first deployment that reports a ticket ageing off the
+  board before its kitchen cleared it, or with the sitting ADR 0026 defers the
+  guest's window to, whichever lands first. Neither is an argument; both are
+  observations.
 - Nothing tells a statement that re-scopes itself from one that leaves the job to
-  the policy. A predicate comparing `restaurant_id` with the transaction's scope
+  the policy, and the act's update is now a third statement in that position: a
+  `restaurant_id` predicate added to it reddens no condition in the tree. A predicate comparing `restaurant_id` with the transaction's scope
   would agree with the policy in every state, including the unscoped one where
   both raise, so no condition here can see the difference. The same holds for the
   second column on the board's join to `restaurant_table`, which the order's own
@@ -901,8 +1004,9 @@ each with the alternatives that were rejected and why.
   which spawns it and reads a record off one stream and a password off the other
   — so the split those two streams exist for is exercised rather than described.
   What is still not checked is the wording it prints them with.
-- Row-level security covers an order and its lines, written and read, and a menu
-  item on a read. `restaurant` and `restaurant_table` carry no policy and cannot:
+- Row-level security covers an order and its lines, written, read and now cleared,
+  and a menu item on a read. The act needed no new policy: `0003`'s is `for all`,
+  so it governs an update exactly as it governs a select. `restaurant` and `restaurant_table` carry no policy and cannot:
   they are what a slug and a printed code are resolved through, so a policy on
   either would have to be satisfied before the scope it defines could be known
   ([ADR 0033](docs/adr/0033-read-the-menu-under-a-policy.md)).
@@ -913,8 +1017,18 @@ each with the alternatives that were rejected and why.
 - Every test suite applies the whole migration sequence, and nothing checks that
   it does. A list chosen by which files a suite reaches was fine while every
   migration created something; an `alter` makes a short list silent, so the rule
-  is now the full prefix — held by a record and by review until the next
-  migration, which is where ADR 0033 puts the check.
+  is the full prefix. There are **ten** such lists, not the seven ADR 0033
+  counted: three suites carry a `.down.sql` list as well, and `0006` is the first
+  change with a down file they could have omitted. What that buys was measured
+  rather than assumed — with `0006`'s down file in place, dropping `0006` from
+  `menu.test.ts` or `staff.test.ts` now reddens their own down conditions, so
+  five of the seven up lists are held by a condition and two —
+  `menu.browser.test.ts` and `order.browser.test.ts` — are held by review alone.
+  The down lists themselves are held by nothing: dropping `0006`'s down file on
+  its own reddens no condition, because `0003`'s down drops the table the column
+  hangs on. ADR 0033 named the next migration as the trigger for a rule; this is
+  that migration, and the rule is the next commit rather than this one
+  ([ADR 0034](docs/adr/0034-clear-a-ticket-by-recording-when-it-was-served.md)).
 - **A menu item that has been ordered cannot be removed from the menu.** The
   order line's foreign key to `menu_item` is `NO ACTION`, so the delete is
   refused. Deleting the whole restaurant is refused too, and by the same

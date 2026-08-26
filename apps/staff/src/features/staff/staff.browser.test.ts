@@ -46,7 +46,7 @@ import { Pool } from 'pg'
 import { type Browser, type BrowserContext, chromium, type Page } from 'playwright'
 import { build, type PreviewServer, preview } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { NOTHING_OPEN } from './board.tsx'
+import { NOT_ACTED, NOTHING_OPEN } from './board.tsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(here, '..', '..', '..', '..', '..')
@@ -59,6 +59,7 @@ const MIGRATIONS = [
   '0003-create-table-order.up.sql',
   '0004-create-staff.up.sql',
   '0005-scope-the-menu-read.up.sql',
+  '0006-record-an-order-served.up.sql',
 ].map((name) => join(ROOT, 'services', 'api', 'migrations', name))
 
 /** The credentials and published port in `compose.yaml`. This role owns the tables and seeds them. */
@@ -209,6 +210,9 @@ let dropped: Seeded // the board read that never completed
 let quiet: Seeded // nothing open
 let named: Seeded // the identity read answered by somebody else
 let held: Seeded // the leak search
+let cleared: Seeded // two open orders, one of them cleared through the control
+let stuck: Seeded // the act that never left the page
+let ended: Seeded // the session refused at the act rather than at the read
 
 // ---------------------------------------------------------------------------
 // Starting the API, the mint, and the page
@@ -294,6 +298,9 @@ beforeAll(async () => {
   quiet = await seed('green-yard', 'Fay', ['Table 5'], 0)
   named = await seed('sage-house', 'Gus', ['Table 6'], 1)
   held = await seed('navy-pier', 'Hal', ['Table 9'], 1)
+  cleared = await seed('ivy-court', 'Ida', ['Table 10', 'Table 11'], 2)
+  stuck = await seed('opal-lane', 'Jo', ['Table 12'], 1)
+  ended = await seed('rust-mill', 'Kit', ['Table 13'], 1)
 
   // Spawned rather than imported: `apps/staff` does not depend on
   // `services/api`, and a test is not a reason to open that boundary.
@@ -450,6 +457,63 @@ async function tickets(page: Page): Promise<string[][]> {
       (await row.locator('.lines').textContent()) ?? '',
     ])
   }
+  return found
+}
+
+/** The act's outcome, or null when there is no board. Read and compared, never waited for. */
+async function actedState(page: Page): Promise<string | null> {
+  const region = page.locator('[data-board]')
+  return (await region.count()) === 0 ? null : region.getAttribute('data-acted')
+}
+
+/** How many times this page has asked the board for its orders. */
+function boardReads(requested: readonly string[]): number {
+  return requested.filter((url) => new URL(url).pathname === '/staff/orders').length
+}
+
+/** The act's address, which carries an id this file does not hold, so it is matched by shape. */
+const ACTED = /^\/staff\/orders\/[^/]+\/served$/
+
+/**
+ * Use the control on the first ticket and let the page finish with it, and
+ * answer how many controls were on the board to begin with.
+ *
+ * **The count is read before anything is clicked, and it is returned rather than
+ * relied on.** `locator.click()` on a locator matching nothing does not fail --
+ * it waits, and then reports a timeout, which is what a dead server and an
+ * unbuilt page produce too and which names neither. So the presence of the
+ * control is a value the conditions below compare, exactly as `boardState` and
+ * `text` already treat the presence of their elements.
+ *
+ * Two settles after the click, and the second is conditional. The act is waited
+ * for either way -- a response with its body, or the failure, whichever came.
+ * The re-read is only waited for once the page has actually issued one, read off
+ * the request log rather than assumed: awaiting a request that was never made
+ * would spend `SETTLE_MS` on every condition where the act does not land.
+ */
+async function clearFirstTicket(page: Page, requested: readonly string[]): Promise<number> {
+  const control = page.locator('[data-board] li button.served')
+  const found = await control.count()
+  if (found === 0) return 0
+
+  const matches = (url: string): boolean => ACTED.test(new URL(url).pathname)
+  const acted = Promise.race([
+    page
+      .waitForResponse((response) => matches(response.url()), { timeout: SETTLE_MS })
+      .then((response) => response.finished()),
+    page.waitForEvent('requestfailed', {
+      predicate: (request) => matches(request.url()),
+      timeout: SETTLE_MS,
+    }),
+  ]).catch(() => undefined)
+  const reread = asking(page, '/staff/orders')
+
+  const before = boardReads(requested)
+  await control.first().click()
+  await acted
+  await flushed(page)
+  if (boardReads(requested) > before) await reread
+  await flushed(page)
   return found
 }
 
@@ -717,6 +781,107 @@ describe('the board a member of staff signs in to', () => {
       leaked,
       requested.filter((url) => !url.startsWith(`${origin}/`)),
     ]).toEqual([false, [], []])
+    await page.close()
+  })
+
+  // ---------------------------------------------------------------------------
+  // Clearing a ticket
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The control, and what the board is afterwards.
+   *
+   * Two tickets, so the row that stays is a value the row that went can differ
+   * from -- a page that emptied the list on any act would pass a one-ticket
+   * fixture. The read count is asserted because it is the only thing that tells
+   * a re-read from a row this page struck out on its own: both leave the same
+   * one row on screen, and only one of them is the board agreeing.
+   */
+  it('clears a ticket from the board when the control is used', async () => {
+    const { page, requested } = await open()
+    await signInAndRead(page, cleared)
+
+    const before = await tickets(page)
+    const readsBefore = boardReads(requested)
+    const controls = await clearFirstTicket(page, requested)
+
+    expect([
+      controls,
+      before,
+      await tickets(page),
+      boardReads(requested) - readsBefore,
+      await boardState(page),
+      await actedState(page),
+    ]).toEqual([
+      2,
+      [
+        [cleared.labels[0] ?? '', `1 × ${cleared.item}`],
+        [cleared.labels[1] ?? '', `2 × ${cleared.item}`],
+      ],
+      [[cleared.labels[1] ?? '', `2 × ${cleared.item}`]],
+      1,
+      'ready',
+      'none',
+    ])
+    await page.close()
+  })
+
+  /**
+   * An act that never left the page.
+   *
+   * The ticket is still the kitchen's to cook, so it stays on the board and the
+   * board stays readable -- a page that blanked itself here would tell a kitchen
+   * its other tickets were gone because one button failed. The sentence is
+   * imported rather than restated, which leaves one copy of it in this
+   * workspace.
+   */
+  it('says an act that did not land, and leaves the board as it was', async () => {
+    const { page, requested } = await open()
+    await page.route('**/staff/orders/*/served', (route) => route.abort())
+    await signInAndRead(page, stuck)
+
+    const readsBefore = boardReads(requested)
+    const controls = await clearFirstTicket(page, requested)
+
+    expect([
+      controls,
+      await boardState(page),
+      await actedState(page),
+      await tickets(page),
+      boardReads(requested) - readsBefore,
+      await text(page, '[data-board] .said'),
+    ]).toEqual([1, 'ready', 'failed', [[stuck.labels[0] ?? '', `1 × ${stuck.item}`]], 0, NOT_ACTED])
+    await page.close()
+  })
+
+  /**
+   * A session refused at the act, which is not an act that failed.
+   *
+   * It is the same answer the board's own read gets and it takes the same path
+   * out of the component, but it is a second call site and gets a condition of
+   * its own rather than a claim by construction. The remedy is signing in again,
+   * so the page goes back to the form -- and the 401 arrives as a value, never
+   * as an unhandled rejection in the console, which is the other thing this
+   * reads.
+   */
+  it('returns to the sign-in state when the act is refused', async () => {
+    const { page, requested, errors } = await open()
+    await page.route('**/staff/orders/*/served', (route) =>
+      route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'that session is not open' }),
+      }),
+    )
+    await signInAndRead(page, ended)
+    const controls = await clearFirstTicket(page, requested)
+
+    expect([controls, await staffState(page), await boardCount(page), errors]).toEqual([
+      1,
+      'refused',
+      0,
+      [],
+    ])
     await page.close()
   })
 })

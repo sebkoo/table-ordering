@@ -218,3 +218,17 @@ page names the signed-in staff member from. The answer's shape survived contact
 with its first client unchanged — no `placedAt`, no grouping by table, no code
 beside the label — and the two fields this record left for a later view are still
 waiting on the same views.
+
+The status column this record deferred to "the first thing staff can do to an
+order rather than the first thing they can see" lands in
+[ADR 0034](0034-clear-a-ticket-by-recording-when-it-was-served.md), and that
+thing is clearing a ticket. `OPEN_ORDERS_IN_RESTAURANT` gained one clause,
+`and o.served_at is null`, and nothing else here moved: the answer's shape is
+unchanged, it still carries no `placed_at` and no code, and the sort is still the
+four terms this record settled. The board-owned window constant this record
+rejected stayed rejected — the two bounds are still one value, and what would
+separate them is now written down as an observation rather than as a date.
+
+The `for all` policy this record relied on for the read turned out to be the
+whole of what the write needed too, so `0006` adds a column and a column grant
+and writes no policy at all.

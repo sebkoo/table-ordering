@@ -78,9 +78,11 @@ const MIGRATION_FILES = [
   '0003-create-table-order.up.sql',
   '0004-create-staff.up.sql',
   '0005-scope-the-menu-read.up.sql',
+  '0006-record-an-order-served.up.sql',
 ]
 
 const DOWN_FILES = [
+  '0006-record-an-order-served.down.sql',
   '0005-scope-the-menu-read.down.sql',
   '0004-create-staff.down.sql',
   '0003-create-table-order.down.sql',

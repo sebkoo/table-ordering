@@ -1,0 +1,14 @@
+-- The column, and with it the grant.
+--
+-- Unlike `0005`, which had to name its policy because it did not create the
+-- table the policy hung on, there is nothing to revoke here: a column privilege
+-- has no existence apart from its column, so dropping the column takes the
+-- `update (served_at)` grant with it. Naming it first would fail on the way back
+-- up, because a revoke after the drop refers to a column that is gone.
+--
+-- This is the first down file in the sequence that discards data rather than
+-- structure: the moments already recorded are lost, and there is nowhere else
+-- they are kept. That is the honest cost of the column and not a reason to skip
+-- the file -- a migration with no undo is one a developer resetting a scratch
+-- database cannot get past.
+alter table table_order drop column served_at;

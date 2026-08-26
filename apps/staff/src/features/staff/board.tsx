@@ -27,12 +27,27 @@
  * other failure is `unavailable`, one state and not two, partitioned by remedy
  * exactly as `placed.tsx` partitions its own.
  *
- * It asks once, when a session opens. Not on a timer: a board that polled would
- * be a second decision about how a screen stays current, and the change that
- * makes one current is the change that argues for it.
+ * **Each row carries the control that clears it**, and an act that lands makes
+ * the board ask again rather than striking the row out here. The ticket then
+ * leaves because the server says it has, which is the same answer to "what is
+ * open" that the row arrived as -- a list this file edited would be a second
+ * account of the queue, and the two would drift the first time an act half
+ * succeeded.
+ *
+ * The act's own outcome is `data-acted` and not a fifth `data-board` value. They
+ * answer different questions: the board was read or it was not, and separately
+ * an act landed or it did not. A failed act must leave a readable board
+ * readable, because blanking it would tell a kitchen its other tickets were gone
+ * on the strength of one button.
+ *
+ * It asks when a session opens and again when an act from this page lands, and
+ * on no other occasion -- the shape `placed.tsx` already has for a send. Not on
+ * a timer: a board that polled would be a second decision about how a screen
+ * stays current, and the change that makes one current is the change that argues
+ * for it.
  */
 
-import { type ReactElement, useEffect, useState } from 'react'
+import { type ReactElement, useCallback, useEffect, useState } from 'react'
 
 /** One line as the route answers it: a name and a quantity, and no price. */
 type Line = { name: string; quantity: number }
@@ -64,6 +79,16 @@ type State =
 export const NOTHING_OPEN =
   'No order has been placed in this restaurant inside the window this board reads.'
 
+/**
+ * What an act that did not land says.
+ *
+ * The remedy is trying again, so it says that and nothing about what went wrong:
+ * a ticket that is still the kitchen's to cook is the same situation whether the
+ * network dropped it or the server did. Exported so the condition that reads it
+ * cannot drift from it, which leaves one copy in this workspace instead of two.
+ */
+export const NOT_ACTED = 'That ticket did not clear. Please try again.'
+
 const SAID: Record<Exclude<State['kind'], 'ready'>, string> = {
   loading: 'Reading the open orders…',
   empty: NOTHING_OPEN,
@@ -79,11 +104,26 @@ export function Board({
   onRefused: (response: Response) => void
 }): ReactElement {
   const [state, setState] = useState<State>({ kind: 'loading' })
+  // Whether the last act landed. `none` covers both "no act has been made" and
+  // "the last one landed", which are the same thing to read: there is nothing to
+  // say. Only a failure has a sentence.
+  const [acted, setActed] = useState<'none' | 'failed'>('none')
+  // An attribute rather than a state. Every outcome clears it, so a board that is
+  // no longer busy has settled into whatever it settled into, and there is no
+  // fifth state for a condition to be unable to reach.
+  const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    let cancelled = false
-
-    const read = async (): Promise<State | { refused: Response }> => {
+  /**
+   * Ask what is open, and settle into whatever came back.
+   *
+   * One function with two callers rather than a counter in the effect's
+   * dependencies: the mount asks, and an act that lands asks again. A dependency
+   * that the effect never reads is a dependency a reader cannot check, and the
+   * lint rule that says so is right -- what makes the board ask again is an
+   * event, and an event is a call.
+   */
+  const read = useCallback(async (): Promise<void> => {
+    const settle = async (): Promise<State | { refused: Response }> => {
       const response = await fetch('/staff/orders', {
         // The token is in a header and never in the path, because a path is
         // written into every proxy log between here and the API. ADR 0029.
@@ -96,21 +136,60 @@ export function Board({
       return orders.length === 0 ? { kind: 'empty' } : { kind: 'ready', tickets: orders }
     }
 
-    read()
-      .catch((): State => ({ kind: 'unavailable' }))
-      .then((next) => {
-        if (cancelled) return
-        if ('refused' in next) onRefused(next.refused)
-        else setState(next)
-      })
-
-    return () => {
-      cancelled = true
-    }
+    const next = await settle().catch((): State => ({ kind: 'unavailable' }))
+    if ('refused' in next) onRefused(next.refused)
+    else setState(next)
   }, [token, onRefused])
 
+  useEffect(() => {
+    void read()
+  }, [read])
+
+  /**
+   * Clear one ticket.
+   *
+   * A `401` is the session ending and leaves by the same door the read's does,
+   * because the remedy is the same and the page has one place that knows it.
+   * Anything else the server says, and a request that never arrived, are one
+   * outcome: the ticket is still the kitchen's to cook and the remedy is trying
+   * again, so there is nothing for a second state to tell anyone.
+   *
+   * The board is asked again here and on no other occasion. A refused act and one
+   * that did not go both left the board as it was, so asking again would be a
+   * request made because a request failed.
+   */
+  async function clear(id: string): Promise<void> {
+    setBusy(true)
+
+    try {
+      const response = await fetch(`/staff/orders/${encodeURIComponent(id)}/served`, {
+        // In a header, never in the path, for the reason the read gives.
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      })
+      if (response.status === 401) {
+        onRefused(response)
+        return
+      }
+      if (!response.ok) {
+        setActed('failed')
+        return
+      }
+
+      setActed('none')
+      await read()
+    } catch {
+      // A rejected fetch, which is what a screen that lost the room's network
+      // produces. It says nothing about whether the kitchen's act was recorded,
+      // and the board's next answer is what settles that.
+      setActed('failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
-    <section data-board={state.kind}>
+    <section data-board={state.kind} data-acted={acted} data-busy={busy ? 'true' : 'false'}>
       {state.kind === 'ready' ? (
         <ul>
           {state.tickets.map((ticket) => (
@@ -128,12 +207,32 @@ export function Board({
               <span className="lines">
                 {ticket.lines.map((line) => `${line.quantity} × ${line.name}`).join(', ')}
               </span>
+              {/*
+                Every control is disabled while any act is unresolved, which is
+                `order.tsx`'s posture towards a send in flight and is here for a
+                weaker reason: one screen, one pair of hands, and an act that has
+                not answered yet is one whose ticket nobody should be clearing
+                twice. It costs nothing a kitchen would notice, because the act
+                is one round trip with no derivation in it.
+              */}
+              <button
+                className="served"
+                type="button"
+                disabled={busy}
+                aria-label={`Clear ${ticket.table.label}`}
+                onClick={() => {
+                  void clear(ticket.id)
+                }}
+              >
+                Served
+              </button>
             </li>
           ))}
         </ul>
       ) : (
         <p className="none">{SAID[state.kind]}</p>
       )}
+      {acted === 'failed' && <p className="said">{NOT_ACTED}</p>}
     </section>
   )
 }

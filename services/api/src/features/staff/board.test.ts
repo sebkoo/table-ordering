@@ -2,12 +2,18 @@
  * The acceptance conditions for the board: what a member of staff is shown of
  * their own restaurant's orders, and what they are not shown of anybody else's.
  *
- * Four restaurants are seeded rather than two, and the reason is the breaks
+ * Six restaurants are seeded rather than two, and the reason is the breaks
  * rather than the behaviour. On one shared fixture a single mutation reddens
  * every condition at once, and a condition that only ever reddens beside five
  * others is evidence about nothing in particular. Keeping the compared pair, the
  * window pair and the empty restaurant apart gives each condition a mutation
  * that reaches it alone.
+ *
+ * The two the act uses are held to the same rule, and it bites harder there
+ * because acting *writes*. A condition whose expectation is a board literal over
+ * a whole restaurant is coupled to every neighbour that serves an order inside
+ * it, so the one condition with such a literal gets a restaurant nobody else
+ * touches, and the rest take one order each inside a second.
  *
  * The window fixtures are placed by arithmetic on `OPEN_WINDOW` rather than at a
  * literal age. A row seeded at "100 minutes" knows the window is two hours, and
@@ -15,8 +21,8 @@
  * be true of it. The margin is five minutes, so the derivation holds while the
  * window is longer than that and stops meaning anything if it ever is not.
  *
- * One credential record is derived and reused across the four staff rows. The
- * board reads that column never, so four derivations would buy nothing but the
+ * One credential record is derived and reused across the six staff rows. The
+ * board reads that column never, so six derivations would buy nothing but the
  * time -- and reusing a record `hashPassword` actually produced is not the
  * hand-written fixture `staff.test.ts` argues against.
  *
@@ -35,7 +41,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from '../../main.ts'
 import { OPEN_WINDOW, SET_SCOPE } from '../order/sql.ts'
 import { digestToken, hashPassword, mintToken } from './credential.ts'
-import { type BoardRow, OPEN_ORDERS_IN_RESTAURANT } from './sql.ts'
+import { type BoardRow, MARK_SERVED, OPEN_ORDERS_IN_RESTAURANT } from './sql.ts'
 
 const OWNER_DATABASE_URL =
   'postgres://table_ordering:table_ordering_dev@127.0.0.1:55432/table_ordering'
@@ -51,6 +57,7 @@ const MIGRATION_FILES = [
   '0003-create-table-order.up.sql',
   '0004-create-staff.up.sql',
   '0005-scope-the-menu-read.up.sql',
+  '0006-record-an-order-served.up.sql',
 ]
 
 function migration(name: string): string {
@@ -72,17 +79,38 @@ function asAppRole(connectionString: string): string {
  * what a hard-coded answer would say, which is why RED is the half that can tell
  * them apart. GREEN is the board with nothing on it. AMBER holds the pair that
  * brackets the window, so that widening the window reddens the window condition
- * and nothing else.
+ * and nothing else. RED's own order is also what the two refusal conditions aim
+ * at: neither writes, so the order stays unserved and each can guard on that --
+ * a mutation that made either write reddens both, which is a co-red this file
+ * declares rather than a coupling it hides.
  */
 const BLUE = '11111111-1111-1111-1111-111111111111'
 const RED = '22222222-2222-2222-2222-222222222222'
 const GREEN = '33333333-3333-3333-3333-333333333333'
 const AMBER = '44444444-4444-4444-4444-444444444444'
 
+/**
+ * The two restaurants the act is exercised in, and they are two rather than one
+ * for the reason the four above are four.
+ *
+ * VIOLET is condition 1's alone. Its expectation is a board *literal* over a
+ * whole restaurant, so an order any other condition served inside it would
+ * change that condition's answer -- which is the coupling the file's own rule
+ * forbids.
+ *
+ * SLATE carries one order per remaining mutating condition. No condition here
+ * asserts a literal over SLATE: the expired-ticket condition compares two reads
+ * it takes itself, so whatever a neighbour served earlier is in both or neither.
+ */
+const VIOLET = '55555555-5555-5555-5555-555555555555'
+const SLATE = '66666666-6666-6666-6666-666666666666'
+
 const ADA = 'f0000000-0000-4000-8000-000000000001'
 const BO = 'f0000000-0000-4000-8000-000000000002'
 const CY = 'f0000000-0000-4000-8000-000000000003'
 const DEE = 'f0000000-0000-4000-8000-000000000004'
+const EVE = 'f0000000-0000-4000-8000-000000000005'
+const FLO = 'f0000000-0000-4000-8000-000000000006'
 
 const ADA_EMAIL = 'ada@blue-door.example'
 
@@ -92,17 +120,23 @@ const BLUE_CODE_2 = '4d81e6c05a93'
 const GREEN_CODE = 'c17a4f9e2b06'
 const AMBER_CODE = '5e2b8d43a1fc'
 const RED_CODE = 'a83f6021d7b4'
+const VIOLET_CODE = '7c04b9d3e618'
+const SLATE_CODE = '2a6f8051cb73'
 
 const BLUE_TABLE_1 = 'b0000000-0000-4000-8000-000000000001'
 const BLUE_TABLE_2 = 'b0000000-0000-4000-8000-000000000002'
 const RED_TABLE = 'b0000000-0000-4000-8000-000000000003'
 const GREEN_TABLE = 'b0000000-0000-4000-8000-000000000004'
 const AMBER_TABLE = 'b0000000-0000-4000-8000-000000000005'
+const VIOLET_TABLE = 'b0000000-0000-4000-8000-000000000006'
+const SLATE_TABLE = 'b0000000-0000-4000-8000-000000000007'
 
 const FLAT_WHITE = 'c0000000-0000-4000-8000-000000000001'
 const CINNAMON_BUN = 'c0000000-0000-4000-8000-000000000002'
 const RED_PINT = 'c0000000-0000-4000-8000-000000000003'
 const AMBER_SOUP = 'c0000000-0000-4000-8000-000000000004'
+const VIOLET_TART = 'c0000000-0000-4000-8000-000000000005'
+const SLATE_STEW = 'c0000000-0000-4000-8000-000000000006'
 
 /**
  * The two Blue Door orders are inserted by one statement, so they share a
@@ -115,12 +149,39 @@ const RED_ORDER = 'a0000000-0000-4000-8000-000000000003'
 const AMBER_INSIDE = 'a0000000-0000-4000-8000-000000000004'
 const AMBER_OUTSIDE = 'a0000000-0000-4000-8000-000000000005'
 
+/**
+ * One order per condition that mutates, so a mutation reaching one reaches only
+ * it. `S7OUT` is placed outside the window by arithmetic on `OPEN_WINDOW`, as
+ * the AMBER pair above is.
+ */
+const V1 = 'a0000000-0000-4000-8000-000000000006'
+const V2 = 'a0000000-0000-4000-8000-000000000007'
+const S2 = 'a0000000-0000-4000-8000-000000000008'
+const S5 = 'a0000000-0000-4000-8000-000000000009'
+const S6 = 'a0000000-0000-4000-8000-000000000010'
+const S7IN = 'a0000000-0000-4000-8000-000000000011'
+const S7OUT = 'a0000000-0000-4000-8000-000000000012'
+
+/** An id no order in this schema carries. The absent half of the 404 comparison. */
+const NO_SUCH_ORDER = 'a0000000-0000-4000-8000-0000000000ff'
+
 const submission = (n: number): string => `d0000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 
 /** Signed in for once, by the one condition whose token the API mints. */
 const ADA_PASSWORD = 'fixture-password-for-ada'
 
 const CLOSED = 'that session is not open'
+
+/**
+ * The act's 404, restated here as `CLOSED` is rather than imported.
+ *
+ * It interpolates nothing, and that is the whole of what makes the
+ * wrong-restaurant answer and the never-existed answer the same bytes. An id in
+ * the sentence would make the two differ by exactly the value that must not
+ * tell them apart.
+ */
+const NOT_HERE = 'that order is not in this restaurant'
+const NOT_HERE_BODY = JSON.stringify({ error: NOT_HERE })
 
 /**
  * The last character changed, at equal length. A truncating comparison, a length
@@ -168,6 +229,34 @@ function rounds(answer: Partial<Board>): string[][] {
     order.id,
     order.lines.map((line) => `${line.quantity} × ${line.name}`).join(', '),
   ])
+}
+
+/** The ids an answer carries, in the sequence the route returned them. */
+function ids(answer: Partial<Board>): string[] {
+  return (answer.orders ?? []).map((order) => order.id)
+}
+
+/** The act, with the token in a header or with no header at all. It carries no body. */
+async function serve(id: string, token: string | null): Promise<Response> {
+  return fetch(`${origin}/staff/orders/${id}/served`, {
+    method: 'POST',
+    headers: token === null ? {} : { authorization: `Bearer ${token}` },
+  })
+}
+
+/**
+ * The moment an order records, read as the owner and as text.
+ *
+ * As text, because two `timestamptz` values arrive as `Date` objects and `===`
+ * on those compares references. The conditions below assert that a repeat left
+ * the moment where it was, and that is a comparison of values.
+ */
+async function servedAt(id: string): Promise<string | null> {
+  const { rows } = await owner.query<{ served_at: string | null }>(
+    'select served_at::text as served_at from table_order where id = $1',
+    [id],
+  )
+  return rows[0]?.served_at ?? null
 }
 
 /**
@@ -360,6 +449,89 @@ beforeAll(async () => {
     ],
   )
 
+  // ---------------------------------------------------------------------
+  // The two restaurants the act is exercised in.
+  //
+  // Seeded after the four above rather than folded into their statements, so
+  // that the conditions those four were written for keep the fixture they were
+  // written against and this block can be read as one thing.
+  // ---------------------------------------------------------------------
+
+  await owner.query(
+    `insert into restaurant (id, slug, name) values
+       ($1, 'violet-hall', 'The Violet Hall'),
+       ($2, 'slate-yard', 'The Slate Yard')`,
+    [VIOLET, SLATE],
+  )
+
+  await owner.query(
+    `insert into menu_item (id, restaurant_id, name, price_minor, currency, sort_order) values
+       ($1, $3, 'Plum tart', 400, 'GBP', 10),
+       ($2, $4, 'Barley stew', 700, 'GBP', 10)`,
+    [VIOLET_TART, SLATE_STEW, VIOLET, SLATE],
+  )
+
+  await owner.query(
+    `insert into restaurant_table (id, restaurant_id, code, label) values
+       ($1, $3, $5, 'Alcove 1'),
+       ($2, $4, $6, 'Pass 1')`,
+    [VIOLET_TABLE, SLATE_TABLE, VIOLET, SLATE, VIOLET_CODE, SLATE_CODE],
+  )
+
+  await owner.query(
+    `insert into staff (id, restaurant_id, email, name, credential) values
+       ($1, $3, 'eve@violet-hall.example', 'Eve', $5),
+       ($2, $4, 'flo@slate-yard.example', 'Flo', $5)`,
+    [EVE, FLO, VIOLET, SLATE, credential],
+  )
+
+  for (const [staff, restaurant] of [
+    [EVE, VIOLET],
+    [FLO, SLATE],
+  ] as const) {
+    const token = mintToken()
+    tokens[staff] = token
+    await owner.query(OPEN_SESSION_ROW, [staff, restaurant, digestToken(token)])
+  }
+
+  // One statement, so both share a transaction time and the sort falls to the
+  // id -- which is what makes `[V1, V2]` a decidable sequence rather than an
+  // incidental one, exactly as the Blue Door pair above is.
+  await owner.query(
+    `insert into table_order (id, restaurant_id, table_id, submission_id) values
+       ($1, $5, $6, $3),
+       ($2, $5, $6, $4)`,
+    [V1, V2, submission(915), submission(916), VIOLET, VIOLET_TABLE],
+  )
+
+  // One order per mutating condition. `S7OUT` is placed outside the window by
+  // arithmetic on the constant the route passes, as the AMBER pair is.
+  await owner.query(
+    `insert into table_order (id, restaurant_id, table_id, submission_id) values
+       ($1, $7, $8, $4),
+       ($2, $7, $8, $5),
+       ($3, $7, $8, $6)`,
+    [S2, S5, S6, submission(917), submission(918), submission(919), SLATE, SLATE_TABLE],
+  )
+  await owner.query(
+    `insert into table_order (id, restaurant_id, table_id, submission_id, placed_at) values
+       ($1, $5, $6, $3, now() - $4::interval + interval '5 minutes'),
+       ($2, $5, $6, $7, now() - $4::interval - interval '5 minutes')`,
+    [S7IN, S7OUT, submission(920), OPEN_WINDOW, SLATE, SLATE_TABLE, submission(921)],
+  )
+
+  await owner.query(
+    `insert into table_order_line (order_id, restaurant_id, menu_item_id, quantity) values
+       ($1, $8, $9, 1),
+       ($2, $8, $9, 2),
+       ($3, $10, $11, 1),
+       ($4, $10, $11, 1),
+       ($5, $10, $11, 1),
+       ($6, $10, $11, 1),
+       ($7, $10, $11, 1)`,
+    [V1, V2, S2, S5, S6, S7IN, S7OUT, VIOLET, VIOLET_TART, SLATE, SLATE_STEW],
+  )
+
   app = new Pool({
     connectionString: asAppRole(CONNECTION_STRING),
     options: `-c search_path=${SCHEMA}`,
@@ -550,5 +722,158 @@ describe('the session a sign-in answers', () => {
       200,
       [BLUE_ORDER_1, BLUE_ORDER_2],
     ])
+  })
+})
+
+describe('the ticket a member of staff clears', () => {
+  // The change this commit exists for, stated as a difference between two reads
+  // of the same board. A row-set diff rather than an assertion about one row:
+  // the ticket that was acted on has to leave, and the one beside it has to
+  // stay, and only a comparison of the whole answer says both at once.
+  //
+  // VIOLET is this condition's alone, so the two literals below are facts about
+  // the fixture rather than about which neighbour ran first.
+  it('takes the acted ticket off the board and leaves the rest where they were', async () => {
+    const before = ids((await (await board(tokens[EVE] ?? null)).json()) as Partial<Board>)
+    const acted = await serve(V1, tokens[EVE] ?? null)
+    const after = ids((await (await board(tokens[EVE] ?? null)).json()) as Partial<Board>)
+
+    expect([before, acted.status, await acted.text(), after]).toEqual([[V1, V2], 204, '', [V2]])
+  })
+
+  // Two kitchen screens show one ticket and both are tapped. The second answer
+  // is the first answer -- the same status and the same empty body -- and the
+  // moment does not move, which is what says the second act wrote nothing.
+  //
+  // `S2` is this condition's own order, so the first call really is a first act.
+  // Sharing a served order with the condition above would have made both calls
+  // repeats and left the transition below unobserved.
+  it('answers a repeat as it answered the first act, and writes nothing further', async () => {
+    const first = await serve(S2, tokens[FLO] ?? null)
+    const firstBody = await first.text()
+    const recorded = await servedAt(S2)
+
+    const second = await serve(S2, tokens[FLO] ?? null)
+    const secondBody = await second.text()
+    const later = await servedAt(S2)
+
+    // `recorded !== null` is not redundant beside the equality. Two nulls are
+    // equal, so without it a route that recorded nothing at all would satisfy
+    // the comparison the condition is named for.
+    expect([
+      first.status,
+      second.status,
+      firstBody,
+      secondBody,
+      recorded !== null,
+      recorded === later,
+    ]).toEqual([204, 204, '', '', true, true])
+  })
+
+  // A's staff aim at B's ticket, and at an id no order carries. Both are
+  // refused, and the two refusals are the same bytes -- which is the evidence,
+  // not a tidiness. A sentence naming the id would tell a caller that one of
+  // the two exists somewhere, and the equality below is what forbids it.
+  it("refuses another restaurant's ticket in the words a ticket that never existed gets", async () => {
+    const [wrong, absent] = await Promise.all([
+      serve(RED_ORDER, tokens[ADA] ?? null),
+      serve(NO_SUCH_ORDER, tokens[ADA] ?? null),
+    ])
+    const [wrongText, absentText] = [await wrong.text(), await absent.text()]
+    const redBoard = ids((await (await board(tokens[BO] ?? null)).json()) as Partial<Board>)
+
+    expect([
+      wrong.status,
+      absent.status,
+      wrongText,
+      absentText,
+      wrongText === absentText,
+      await servedAt(RED_ORDER),
+      redBoard,
+    ]).toEqual([404, 404, NOT_HERE_BODY, NOT_HERE_BODY, true, null, [RED_ORDER]])
+  })
+
+  // Refused as values, never by exception, and the row is read afterwards
+  // because a refusal that still wrote would be the worst of both.
+  it('refuses a signed-out and a forged act, and writes nothing', async () => {
+    const [absent, forged] = await Promise.all([
+      serve(RED_ORDER, null),
+      serve(RED_ORDER, nearMiss(tokens[ADA] ?? '')),
+    ])
+
+    expect([
+      [absent.status, await absent.json()],
+      [forged.status, await forged.json()],
+      await servedAt(RED_ORDER),
+    ]).toEqual([[401, { error: CLOSED }], [401, { error: CLOSED }], null])
+  })
+
+  // One statement, three scopes, and the order of the first two is load-bearing.
+  // The wrong-scope call runs while `S5` is still unserved, so the zero it
+  // reaches is the policy refusing it. Run after the owning call it would read
+  // zero because `served_at` had stopped being null, and a removed policy would
+  // pass.
+  it('scopes the update by the policy rather than by the statement', async () => {
+    const run = (client: PoolClient) => client.query(MARK_SERVED, [S5])
+
+    const other = await scoped(app, BLUE, run)
+    const owning = await scoped(app, SLATE, run)
+
+    // A pool of its own, for the reason the board's own scope condition gives:
+    // the code a missing scope raises depends on the connection's history.
+    const unscoped = new Pool({
+      connectionString: asAppRole(CONNECTION_STRING),
+      options: `-c search_path=${SCHEMA}`,
+      max: 1,
+    })
+    let none: string
+    try {
+      none = await sqlstate(() => unscoped.query(MARK_SERVED, [S5]))
+    } finally {
+      await unscoped.end()
+    }
+
+    expect([owning.rowCount, other.rowCount, none]).toEqual([1, 0, '42704'])
+  })
+
+  // The privilege, at the layer that holds it. The application role is granted
+  // `update` on one column, so a statement naming any other is refused before a
+  // policy is consulted -- and unlike a policy this holds for a statement nobody
+  // reviewed. Two transactions rather than one: a refused statement aborts the
+  // transaction it was sent in.
+  it('grants the update on one column, so a statement naming another is refused', async () => {
+    const moved = await sqlstate(() =>
+      scoped(app, SLATE, (client) =>
+        client.query('update table_order set placed_at = now() where id = $1', [S6]),
+      ),
+    )
+    const served = await sqlstate(() =>
+      scoped(app, SLATE, (client) =>
+        client.query('update table_order set served_at = now() where id = $1', [S6]),
+      ),
+    )
+
+    expect([moved, served]).toEqual(['42501', 'no error'])
+  })
+
+  // The window bounds what a read discloses, not what a write may record. A
+  // ticket nobody cleared before it aged off the board is the forgotten ticket,
+  // and recording that it was served records something true.
+  //
+  // The last element is an equality between two reads this condition takes
+  // itself, never a literal. That is what keeps it independent of whatever a
+  // neighbour served in SLATE earlier: such an order is in both reads or in
+  // neither, and the comparison is unmoved either way.
+  it('serves a ticket the window no longer shows, and the board does not change', async () => {
+    const before = ids((await (await board(tokens[FLO] ?? null)).json()) as Partial<Board>)
+    const acted = await serve(S7OUT, tokens[FLO] ?? null)
+    const after = ids((await (await board(tokens[FLO] ?? null)).json()) as Partial<Board>)
+
+    expect([
+      before.includes(S7OUT),
+      acted.status,
+      (await servedAt(S7OUT)) !== null,
+      JSON.stringify(after) === JSON.stringify(before),
+    ]).toEqual([false, 204, true, true])
   })
 })

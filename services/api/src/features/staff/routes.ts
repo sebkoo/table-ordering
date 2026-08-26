@@ -6,6 +6,12 @@
  * belong to, with the token every later request carries.
  * `GET /staff/sessions/current` answers the same identity for a token.
  * `GET /staff/orders` answers the open orders in that token's restaurant.
+ * `POST /staff/orders/:id/served` clears one of them from that board.
+ *
+ * The fourth is this router's first write, and it takes no body at all. There is
+ * nothing a caller may say about the act beyond which ticket it is for, and an
+ * address that took a field would be an address that could take `false` -- which
+ * is un-serving, a second behaviour nobody has asked for. ADR 0034.
  *
  * The third address is here rather than in a slice of its own because this
  * router is grouped by the boundary it sits behind: everything in this file
@@ -33,10 +39,13 @@ import { OPEN_WINDOW, SET_SCOPE } from '../order/sql.ts'
 import { digestToken, mintToken, verifyNobody, verifyPassword } from './credential.ts'
 import {
   type BoardRow,
+  MARK_SERVED,
   OPEN_ORDERS_IN_RESTAURANT,
   OPEN_SESSION,
+  ORDER_IN_RESTAURANT,
   SESSION_FOR_DIGEST,
   SESSION_LIFETIME,
+  type ServedRow,
   type SessionRow,
   STAFF_FOR_EMAIL,
   type StaffRow,
@@ -142,8 +151,38 @@ const BOARD_SCHEMA = {
   },
 }
 
+/** As {@link UUID} in the order routes: what a URL segment may hold, and nothing about secrecy. */
+const ORDER_ID = {
+  type: 'string',
+  pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+}
+
+const SERVED_SCHEMA = {
+  params: { type: 'object', required: ['id'], properties: { id: ORDER_ID } },
+  response: {
+    // No body. The caller holds the id already -- it is in the address it just
+    // called -- and what it does next is read the board again, so a field here
+    // would be one nobody reads and every later change has to keep true. It also
+    // makes a first act and a repeat identical down to the byte.
+    204: { type: 'null' },
+    401: ERROR,
+    404: ERROR,
+  },
+}
+
 const REFUSED = 'that email and password do not match'
 const CLOSED = 'that session is not open'
+
+/**
+ * What an order this session cannot clear is answered with, and it interpolates
+ * nothing.
+ *
+ * Another restaurant's ticket and an id no order ever carried get this same
+ * sentence, byte for byte. A sentence naming the id would differ between the two
+ * by exactly the value that must not tell them apart -- and telling them apart is
+ * telling a caller that a ticket they cannot see exists somewhere.
+ */
+const NOT_HERE = 'that order is not in this restaurant'
 
 const BEARER = /^bearer +(\S+)$/i
 
@@ -229,6 +268,59 @@ async function openOrders(pool: Pool, digest: Buffer): Promise<BoardOrder[] | nu
   }
 }
 
+/** What one act concluded. `refused` is a session that does not resolve, never an order. */
+type Acted = 'served' | 'not-here' | 'refused'
+
+/**
+ * One transaction, in this router's established shape: resolve what the caller
+ * holds, set the scope from the row it returned, then write.
+ *
+ * Two statements, because one cannot answer both questions. The update tells a
+ * first act from everything else; the read-back tells a repeat from an order
+ * this scope cannot see. `and served_at is null` on the first is what makes the
+ * repeat write nothing at all rather than rewrite the row with the same value.
+ *
+ * Neither statement names a restaurant. The policy `0003` put on `table_order`
+ * is `for all`, so it governs this update exactly as it governs the board's
+ * read, and an id belonging to another restaurant reaches zero rows twice --
+ * which is the same thing an id belonging to nobody does, and the reason both
+ * are answered with the same sentence.
+ */
+async function markServed(pool: Pool, digest: Buffer, id: string): Promise<Acted> {
+  const client = await pool.connect()
+
+  try {
+    await client.query('begin')
+
+    const { rows } = await client.query<SessionRow>(SESSION_FOR_DIGEST, [digest])
+    const session = rows[0]
+    if (session === undefined) {
+      await client.query('rollback')
+      return 'refused'
+    }
+
+    await client.query(SET_SCOPE, [session.restaurant_id])
+
+    const acted = await client.query<{ id: string }>(MARK_SERVED, [id])
+    if (acted.rows[0] !== undefined) {
+      await client.query('commit')
+      return 'served'
+    }
+
+    const existing = await client.query<ServedRow>(ORDER_IN_RESTAURANT, [id])
+    await client.query('commit')
+    // A row here is one this scope can see and this act did not change, which on
+    // this statement has one cause: it was already served. The same answer as
+    // the first act, because a second screen cannot act on the difference.
+    return existing.rows[0] === undefined ? 'not-here' : 'served'
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 export function staffRoutes(pool: Pool) {
   return async (app: FastifyInstance): Promise<void> => {
     app.post<{ Body: { email: string; password: string } }>(
@@ -287,5 +379,20 @@ export function staffRoutes(pool: Pool) {
 
       return { orders }
     })
+
+    app.post<{ Params: { id: string } }>(
+      '/staff/orders/:id/served',
+      { schema: SERVED_SCHEMA },
+      async (request, reply) => {
+        const token = bearer(request.headers.authorization)
+        if (token === null) return reply.code(401).send({ error: CLOSED })
+
+        const acted = await markServed(pool, digestToken(token), request.params.id)
+        if (acted === 'refused') return reply.code(401).send({ error: CLOSED })
+        if (acted === 'not-here') return reply.code(404).send({ error: NOT_HERE })
+
+        return reply.code(204).send()
+      },
+    )
   }
 }

@@ -49,6 +49,7 @@ const MIGRATION_FILES = [
   '0003-create-table-order.up.sql',
   '0004-create-staff.up.sql',
   '0005-scope-the-menu-read.up.sql',
+  '0006-record-an-order-served.up.sql',
 ]
 
 function migration(name: string): string {
@@ -88,6 +89,8 @@ const READ_NO_LINES = 'd47b028ea6c1'
 const READ_SEQUENCE = 'b1c60fa3d85e'
 const READ_WINDOW = '9024e7bc51fa'
 const READ_SCOPED = 'f6d3b90a27ce'
+/** The table the served-order condition uses, and nothing else does. */
+const READ_SERVED = '3b7e05c1a94d'
 
 const READ_ROUNDS_TABLE = 'b0000000-0000-4000-8000-000000000004'
 const READ_EMPTY_TABLE = 'b0000000-0000-4000-8000-000000000005'
@@ -95,6 +98,7 @@ const READ_NO_LINES_TABLE = 'b0000000-0000-4000-8000-000000000006'
 const READ_SEQUENCE_TABLE = 'b0000000-0000-4000-8000-000000000007'
 const READ_WINDOW_TABLE = 'b0000000-0000-4000-8000-000000000008'
 const READ_SCOPED_TABLE = 'b0000000-0000-4000-8000-000000000009'
+const READ_SERVED_TABLE = 'b0000000-0000-4000-8000-00000000000a'
 
 /**
  * Two orders whose ids sort the opposite way to their `placed_at`, which is what
@@ -280,7 +284,8 @@ beforeAll(async () => {
        ($6, $1, $7, 'Table 13'),
        ($8, $1, $9, 'Table 14'),
        ($10, $1, $11, 'Table 15'),
-       ($12, $1, $13, 'Table 16')`,
+       ($12, $1, $13, 'Table 16'),
+       ($14, $1, $15, 'Table 17')`,
     [
       BLUE,
       READ_ROUNDS_TABLE,
@@ -295,6 +300,8 @@ beforeAll(async () => {
       READ_WINDOW,
       READ_SCOPED_TABLE,
       READ_SCOPED,
+      READ_SERVED_TABLE,
+      READ_SERVED,
     ],
   )
   await owner.query(
@@ -534,6 +541,45 @@ describe('the orders a guest reads back from their table', () => {
     expect([response.status, await response.json()]).toEqual([200, { orders: [] }])
   })
 
+  /**
+   * The kitchen clearing a ticket does not clear it from the guest's page.
+   *
+   * "Open" is two questions asked of the same rows. A guest is asking whether
+   * their round reached the kitchen, and the answer stays yes after the kitchen
+   * has cooked it; the board is asking what is still outstanding, and there the
+   * same row has to go. So the board's read gained a clause and this one did
+   * not, and this is the only condition that says so -- give
+   * `OPEN_ORDERS_AT_TABLE` the board's clause and nothing else in the tree goes
+   * red.
+   *
+   * The row is served here rather than in the fixture so that a schema without
+   * the column fails this condition alone instead of the whole file's setup.
+   */
+  it('still reads back an order the kitchen has served', async () => {
+    const sent = submission(30)
+    const placed = await postOrder(
+      READ_SERVED,
+      order(sent, [{ menuItemId: FLAT_WHITE, quantity: 1 }]),
+    )
+    const { id } = ((await placed.json()) as { order: { id: string } }).order
+
+    // As the owner, which is how a kitchen's act reaches this fixture without
+    // this suite depending on the staff slice's route.
+    const cleared = await owner.query('update table_order set served_at = now() where id = $1', [
+      id,
+    ])
+
+    const response = await getOrders(READ_SERVED)
+    const body = (await response.json()) as { orders?: { id: string }[] }
+
+    expect([
+      placed.status,
+      cleared.rowCount,
+      response.status,
+      (body.orders ?? []).map((o) => o.id),
+    ]).toEqual([201, 1, 200, [id]])
+  })
+
   it('refuses a code no table is served at, and lists nothing', async () => {
     const response = await getOrders('000000000000')
     expect([response.status, await response.json()]).toEqual([
@@ -696,7 +742,14 @@ describe('the policy the application writes under', () => {
   // statement in `sql.ts` is `on conflict ... do nothing` because `do update`
   // would need UPDATE; this is what stops that being restored by widening a
   // grant instead of by changing the statement.
-  it('gives the application role no way to alter or remove an order', async () => {
+  //
+  // "Move or remove" rather than "alter", since `0006`: the role now holds
+  // `update (served_at)` and nothing else, so an order can be recorded as served
+  // and still cannot be moved to another table, re-timed or deleted. That the
+  // grant reaches exactly one column is pinned in the staff slice, beside the
+  // route that uses it; what this condition holds is the rest of the boundary,
+  // and a grant widened to the whole table reddens both.
+  it('gives the application role no way to move or remove an order', async () => {
     const update = await sqlstate(() =>
       scoped(app, BLUE, (client) => client.query('update table_order set placed_at = now()')),
     )
@@ -716,6 +769,7 @@ describe('the down migration', () => {
   // actually makes.
   const DOWN_SCHEMA = `order_down_test_${process.pid}`
   const DOWN_FILES = [
+    '0006-record-an-order-served.down.sql',
     '0005-scope-the-menu-read.down.sql',
     '0004-create-staff.down.sql',
     '0003-create-table-order.down.sql',

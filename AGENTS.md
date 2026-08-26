@@ -122,6 +122,10 @@ that creates the thing it governs.
 - A picture of a page in this repository's documents is a capture: taken from
   the product this repository builds, stored here rather than fetched from
   anywhere else, and captioned with the revision it was taken at.
+- A write that sets one column is granted one column. The application role holds
+  `update` on exactly the column the act records and on no other, so a statement
+  naming another is refused by the privilege rather than by review, and the
+  refusal holds for a statement nobody read.
 
 ## Change size
 

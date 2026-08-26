@@ -171,3 +171,14 @@ The staff identity this record deferred lands in
 [ADR 0029](0029-verify-a-staff-credential-and-carry-a-session.md). The board it
 was deferred for is still not built: what 0029 adds is a request that can be
 told from a guest's, and the read that uses it is the change after.
+
+The status column this record deferred lands in
+[ADR 0034](0034-clear-a-ticket-by-recording-when-it-was-served.md), which is the
+staff client this file named as its writer. Two things there follow from this
+one. The column is `served_at` and not a status, so "unserved" is the absence of
+a moment rather than a state anybody enumerates. And the read this record is
+about **did not** take the new clause: a guest is asking whether their round
+reached the kitchen, and that answer stays yes after the kitchen has cooked it,
+so "open" now means recent here and recent-and-unserved on the board. The window
+still bounds both, and the sentence about what would separate them has moved from
+this record's successor to that one's.
