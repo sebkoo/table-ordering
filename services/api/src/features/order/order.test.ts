@@ -47,6 +47,8 @@ const MIGRATION_FILES = [
   '0001-create-menu.up.sql',
   '0002-create-restaurant-table.up.sql',
   '0003-create-table-order.up.sql',
+  '0004-create-staff.up.sql',
+  '0005-scope-the-menu-read.up.sql',
 ]
 
 function migration(name: string): string {
@@ -714,6 +716,8 @@ describe('the down migration', () => {
   // actually makes.
   const DOWN_SCHEMA = `order_down_test_${process.pid}`
   const DOWN_FILES = [
+    '0005-scope-the-menu-read.down.sql',
+    '0004-create-staff.down.sql',
     '0003-create-table-order.down.sql',
     '0002-create-restaurant-table.down.sql',
     '0001-create-menu.down.sql',
@@ -727,11 +731,17 @@ describe('the down migration', () => {
       options: `-c search_path=${DOWN_SCHEMA}`,
     })
 
+    // The policy count names the two tables this migration created rather than the
+    // schema. A schema-wide count would move whenever any other migration added a
+    // policy -- `0005` did -- and would then be reporting something other than
+    // whether `0003`'s down took its own policies with its own tables.
     const present = async () => {
       const { rows } = await scratch.query(
         `select to_regclass('${DOWN_SCHEMA}.table_order') as table_order,
                 to_regclass('${DOWN_SCHEMA}.table_order_line') as table_order_line,
-                (select count(*) from pg_policies where schemaname = '${DOWN_SCHEMA}')::int as policies,
+                (select count(*) from pg_policies
+                  where schemaname = '${DOWN_SCHEMA}'
+                    and tablename in ('table_order', 'table_order_line'))::int as policies,
                 (select count(*) from pg_constraint c
                    join pg_class t on t.oid = c.conrelid
                    join pg_namespace n on n.oid = t.relnamespace

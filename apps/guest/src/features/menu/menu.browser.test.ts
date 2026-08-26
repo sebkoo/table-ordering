@@ -34,12 +34,17 @@ const here = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(here, '..', '..', '..', '..', '..')
 const GUEST = join(ROOT, 'apps', 'guest')
 const API_ENTRY = join(ROOT, 'services', 'api', 'src', 'main.ts')
+// The whole migration prefix, not the subset this suite reaches. `0003` creates
+// the role the API below connects as, `0005` is what puts the menu it reads under
+// a policy, and `0004` is neither -- it is here because a list chosen by which
+// files a suite touches cannot stay right once a migration is an `alter`, and a
+// suite whose list skips one passes against a schema that exists nowhere. ADR 0033.
 const MIGRATIONS = [
   '0001-create-menu.up.sql',
   '0002-create-restaurant-table.up.sql',
-  // Applied although nothing here orders anything: it is the migration that
-  // creates the role the API below connects as, and grants it the menu tables.
   '0003-create-table-order.up.sql',
+  '0004-create-staff.up.sql',
+  '0005-scope-the-menu-read.up.sql',
 ].map((name) => join(ROOT, 'services', 'api', 'migrations', name))
 
 /** The credentials and published port in `compose.yaml`. This role owns the tables and seeds them. */

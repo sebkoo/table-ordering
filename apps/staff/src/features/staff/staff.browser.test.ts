@@ -58,6 +58,7 @@ const MIGRATIONS = [
   '0002-create-restaurant-table.up.sql',
   '0003-create-table-order.up.sql',
   '0004-create-staff.up.sql',
+  '0005-scope-the-menu-read.up.sql',
 ].map((name) => join(ROOT, 'services', 'api', 'migrations', name))
 
 /** The credentials and published port in `compose.yaml`. This role owns the tables and seeds them. */

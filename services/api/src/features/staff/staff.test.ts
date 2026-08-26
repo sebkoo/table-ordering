@@ -58,6 +58,7 @@ const MIGRATION_FILES = [
   '0002-create-restaurant-table.up.sql',
   '0003-create-table-order.up.sql',
   '0004-create-staff.up.sql',
+  '0005-scope-the-menu-read.up.sql',
 ]
 
 function migration(name: string): string {
@@ -370,6 +371,7 @@ describe('the down migration', () => {
   // developer resetting a scratch database actually makes.
   const DOWN_SCHEMA = `staff_down_test_${process.pid}`
   const DOWN_FILES = [
+    '0005-scope-the-menu-read.down.sql',
     '0004-create-staff.down.sql',
     '0003-create-table-order.down.sql',
     '0002-create-restaurant-table.down.sql',

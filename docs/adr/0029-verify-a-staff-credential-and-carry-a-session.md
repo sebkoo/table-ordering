@@ -96,6 +96,15 @@ the position `restaurant`, `restaurant_table` and `menu_item` already hold. What
 ties a session to one restaurant is a composite foreign key,
 `(staff_id, restaurant_id)` referencing `staff (id, restaurant_id)`.
 
+That list folds two different things together, and
+[ADR 0033](0033-read-the-menu-under-a-policy.md) draws the line it loses.
+`restaurant` and `restaurant_table` are resolve tables in the sense this
+paragraph means and cannot carry a policy. `menu_item` is resolved through by
+nothing: it is read after a scope already exists, on the guest's path and on the
+board's, so its position here was historical rather than structural. It carries
+a policy from `0005`. What this paragraph says about `staff` and `staff_session`
+is unaffected and stands as written.
+
 **The operator mints a credential.** There is no admin route, exactly as there
 is none for a restaurant, a table or a menu item. Running
 `services/api/src/features/staff/credential.ts` prints a record on stdout and,

@@ -29,8 +29,10 @@ that creates the thing it governs.
   4217 code. Never a float, never a decimal string, in the schema or on the
   wire.
 - A restaurant's rows are read only through a query scoped to that restaurant.
-  `restaurant`, `restaurant_table` and `menu_item` carry no policy, so on a read
-  of those the scope is the query's job.
+  `restaurant` and `restaurant_table` are what a slug and a printed code are
+  resolved through, so they carry no policy and on a read of those the scope is
+  the query's job. Every other table holding a restaurant's rows is read under a
+  policy, and its statements name no restaurant.
 - An order is read under the policy it is written under, on a transaction scoped
   from the row this request's one resolve returned -- a printed code's table, a
   staff credential's session. A read that establishes no scope is refused, never
@@ -46,10 +48,11 @@ that creates the thing it governs.
 - A row naming two of a restaurant's rows names them through one composite
   foreign key, so a child cannot point at a parent in another restaurant while
   every single-column key is satisfied.
-- One query per request resolves what the caller holds -- a printed code, a
-  staff credential -- to the restaurant that owns it, and it is the only one in
-  that request with no restaurant to scope by. Every query after it is scoped by
-  the restaurant it returned, never by anything the caller sent.
+- One query per request resolves what the caller holds -- a restaurant's public
+  slug, a printed code, a staff credential -- to the restaurant that owns it, and
+  it is the only one in that request with no restaurant to scope by. Every query
+  after it is scoped by the restaurant it returned, never by anything the caller
+  sent.
 - A table a credential is resolved through carries no policy, because a policy
   would have to be satisfied before the scope it defines could be known. Its
   rows are tied to their restaurant by a composite foreign key instead, and what

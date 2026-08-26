@@ -116,24 +116,27 @@ export type SessionRow = {
  *
  * Nothing here names a restaurant, and that is the whole of the evidence this
  * statement carries. `table_order` and `table_order_line` hold `for all`
- * policies whose `using` clause is `app.restaurant_id`, set from the row
- * {@link SESSION_FOR_DIGEST} returned, so a predicate here would be the
- * statement taking back the job the policy now has -- and on a connection that
- * has never carried the setting the read is refused rather than answered with
- * nothing.
+ * policies and `menu_item` a `for select` one since `0005`. Every one of them
+ * reads `app.restaurant_id`, set from the row {@link SESSION_FOR_DIGEST}
+ * returned, so a predicate here would be the statement taking back the job those
+ * policies now have -- and on a connection that has never carried the setting the
+ * read is refused rather than answered with nothing.
  *
  * The window is the guest read's `OPEN_WINDOW`, imported rather than restated.
  * A second constant for the same idea is the drift ADR 0028 exists to prevent.
  * "Open" means recent, here as there: no column records that an order has been
  * served, and nothing can write one until staff can act rather than only look.
  *
- * `restaurant_table` carries no policy, so its join scopes itself -- against
- * `o.restaurant_id`, which the policy has already filtered, and never against
- * anything the caller sent. It is an inner join and cannot drop an order:
- * `table_id` is `not null` and its composite foreign key guarantees the row. The
- * two joins below it are LEFT for the reason `MENU_FOR_RESTAURANT` gives, so an
- * order with nothing on it arrives as one row with null line columns rather than
- * vanishing.
+ * `restaurant_table` carries no policy and cannot -- it is what a printed code is
+ * resolved through -- so its join scopes itself, against `o.restaurant_id`, which
+ * the policy has already filtered, and never against anything the caller sent. It
+ * is an inner join and cannot drop an order: `table_id` is `not null` and its
+ * composite foreign key guarantees the row. The second column on the join to
+ * `menu_item` is kept on the same terms the guest's read keeps its own: written
+ * for the invariant it serves, and now unobservable beside the policy. ADR 0033.
+ *
+ * The two joins below `restaurant_table` are LEFT, so an order with nothing on it
+ * arrives as one row with null line columns rather than vanishing.
  *
  * The sort is `OPEN_ORDERS_AT_TABLE`'s four terms unchanged, so the board reads
  * oldest first, which is the order a kitchen works.

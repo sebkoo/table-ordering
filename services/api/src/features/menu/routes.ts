@@ -15,11 +15,26 @@
  * parameter that names nothing with 404. They are different answers to a guest
  * -- one address cannot name a table, the other names no table that exists --
  * and the page tells them apart rather than folding both into one.
+ *
+ * Each is one transaction, in the shape the order and board reads already have:
+ * resolve what the caller holds, set the scope from the row that resolve
+ * returned, then read a statement that names no restaurant. What scopes the menu
+ * is `menu_item_scope` rather than a predicate anybody has to remember, and a
+ * read that establishes no scope is refused rather than answered with nothing.
+ * ADR 0033.
  */
 
 import type { FastifyInstance } from 'fastify'
 import type { Pool } from 'pg'
-import { MENU_FOR_RESTAURANT, MENU_FOR_TABLE, type MenuRow, type TableMenuRow } from './sql.ts'
+import { SET_SCOPE } from '../order/sql.ts'
+import {
+  MENU_ITEMS,
+  type MenuItemRow,
+  RESTAURANT_FOR_SLUG,
+  RESTAURANT_FOR_TABLE_CODE,
+  type RestaurantRow,
+  type TableRestaurantRow,
+} from './sql.ts'
 
 const SLUG = { type: 'string', pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$', maxLength: 64 }
 
@@ -103,23 +118,58 @@ const TABLE_MENU_SCHEMA = {
 }
 
 /**
- * A row with null item columns is the left join reporting a restaurant with
- * nothing available, which is an empty menu rather than a 404. Both queries
- * produce that row for the same reason, so both read it the same way.
+ * The menu of whatever the resolve found, or null when it found nothing.
+ *
+ * One transaction, and the resolve is the only statement in it with no
+ * restaurant to scope by. `SET_SCOPE` is imported from the order slice rather
+ * than restated here: it is one statement with one meaning, and a second copy of
+ * it would be a second place to get `is_local` wrong.
+ *
+ * null is a slug or a code that names nothing, which is a 404. An empty list is a
+ * restaurant that exists and has nothing available, which is a 200 -- and the two
+ * are told apart by which statement came back empty rather than by reading nulls
+ * out of a left join.
  */
-function availableItems(rows: readonly MenuRow[]) {
-  const items = []
-  for (const row of rows) {
-    if (row.item_id === null || row.item_name === null) continue
-    if (row.price_minor === null || row.currency === null) continue
-    items.push({
-      id: row.item_id,
-      name: row.item_name,
-      priceMinor: row.price_minor,
-      currency: row.currency,
-    })
+async function menuOf<Row extends RestaurantRow>(
+  pool: Pool,
+  resolve: string,
+  held: string,
+): Promise<{ restaurant: Row; items: MenuItemRow[] } | null> {
+  const client = await pool.connect()
+
+  try {
+    await client.query('begin')
+
+    const { rows } = await client.query<Row>(resolve, [held])
+    const restaurant = rows[0]
+    if (restaurant === undefined) {
+      await client.query('rollback')
+      return null
+    }
+
+    // From here on nothing is scoped by hand. The restaurant came from the row
+    // above, and the statement below is checked against it by a policy.
+    await client.query(SET_SCOPE, [restaurant.restaurant_id])
+    const items = await client.query<MenuItemRow>(MENU_ITEMS)
+
+    await client.query('commit')
+    return { restaurant, items: items.rows }
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
   }
-  return items
+}
+
+/** The wire shape of a menu item. The prices cross as they are stored: minor units beside the code. */
+function items(rows: readonly MenuItemRow[]) {
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    priceMinor: row.price_minor,
+    currency: row.currency,
+  }))
 }
 
 export function menuRoutes(pool: Pool) {
@@ -129,14 +179,16 @@ export function menuRoutes(pool: Pool) {
       { schema: MENU_SCHEMA },
       async (request, reply) => {
         const { slug } = request.params
-        const { rows } = await pool.query<MenuRow>(MENU_FOR_RESTAURANT, [slug])
+        const menu = await menuOf<RestaurantRow>(pool, RESTAURANT_FOR_SLUG, slug)
 
-        const first = rows[0]
-        if (first === undefined) {
+        if (menu === null) {
           return reply.code(404).send({ error: `no restaurant is served at ${slug}` })
         }
 
-        return { restaurant: { slug, name: first.restaurant_name }, items: availableItems(rows) }
+        return {
+          restaurant: { slug, name: menu.restaurant.restaurant_name },
+          items: items(menu.items),
+        }
       },
     )
 
@@ -145,20 +197,20 @@ export function menuRoutes(pool: Pool) {
       { schema: TABLE_MENU_SCHEMA },
       async (request, reply) => {
         const { code } = request.params
-        const { rows } = await pool.query<TableMenuRow>(MENU_FOR_TABLE, [code])
+        const menu = await menuOf<TableRestaurantRow>(pool, RESTAURANT_FOR_TABLE_CODE, code)
 
-        const first = rows[0]
-        if (first === undefined) {
+        if (menu === null) {
           return reply.code(404).send({ error: `no table is served at ${code}` })
         }
 
         // The slug comes back from the row rather than from the request: the
         // caller sent a code, and which restaurant it belongs to is the
-        // query's answer, not the caller's claim.
+        // resolve's answer, not the caller's claim.
+        const { restaurant } = menu
         return {
-          restaurant: { slug: first.restaurant_slug, name: first.restaurant_name },
-          table: { label: first.table_label },
-          items: availableItems(rows),
+          restaurant: { slug: restaurant.restaurant_slug, name: restaurant.restaurant_name },
+          table: { label: restaurant.table_label },
+          items: items(menu.items),
         }
       },
     )

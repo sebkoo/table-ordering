@@ -8,7 +8,7 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-25 · a member of staff signs in on a page of their own and
+**Status:** 2026-08-26 · a member of staff signs in on a page of their own and
 reads every open order in their restaurant, and no other restaurant's.
 
 ## What it looks like
@@ -315,11 +315,9 @@ any page this repository serves rather than about one of them.
 
 ### Next
 
-1. The menu read will move under the policy too, so that a menu query stops
-   carrying its own scope.
-2. The list on the guest's page will keep itself current, so a round sent from
+1. The list on the guest's page will keep itself current, so a round sent from
    another phone at the same table appears without anyone reloading.
-3. The board will keep itself current the same way, and will say how long a
+2. The board will keep itself current the same way, and will say how long a
    ticket has waited — the field for that is deliberately not on the answer yet.
 
 ## How a menu request is served
@@ -331,12 +329,16 @@ any page this repository serves rather than about one of them.
   Fastify route ─────────────  services/api/src/features/menu/routes.ts
         │   the code is validated against the route's JSON Schema
         ▼   a pattern it fails → 400, which is not the same answer as 404
-  one SQL query ─────────────  services/api/src/features/menu/sql.ts
-        │   restaurant_table JOIN restaurant, LEFT JOIN the available items
-        ▼   the code finds the restaurant; every join after it is scoped by it
+  one transaction ───────────  services/api/src/features/menu/sql.ts
+        │   the code resolves to a restaurant — the one unscoped read, and the
+        │   only statement here with no restaurant to scope by
+        ▼   set_config('app.restaurant_id', that restaurant, local)
+  the policy ────────────────  services/api/migrations/0005-*.up.sql
+        │   the menu select names no restaurant at all; menu_item_scope is what
+        ▼   scopes it, and an unscoped read is refused rather than answered empty
   PostgreSQL ────────────────  services/api/migrations/*.up.sql
-        │   no rows → 404 · rows → the menu, serialised through the
-        ▼   response schema, so only the fields it names can escape
+        │   no restaurant → 404 · no items → an empty menu, which is not the
+        ▼   same answer · the rest serialised through the response schema
   the page on a guest's phone
 ```
 
@@ -349,6 +351,18 @@ production.
 The response schema is the contract rather than a description of one. A column
 that starts coming back from the query cannot reach a guest unless the schema
 names it.
+
+Two statements rather than one, and the split is what puts the read under the
+policy. A single statement cannot do both jobs: it would have to carry the slug
+or the code in its own `where` clause, and a statement that knows its own
+restaurant is one a later edit can quietly widen with nothing to go red. So the
+first statement finds the restaurant and the second names none, and which
+restaurant the second one saw is not something the caller can influence
+([ADR 0033](docs/adr/0033-read-the-menu-under-a-policy.md)).
+
+A restaurant that does not exist and a restaurant that has sold out are still
+different answers, and they are now told apart by which of the two statements
+came back empty rather than by reading nulls out of a join.
 
 ## How an order is taken
 
@@ -423,7 +437,7 @@ it is started.
 | A member of staff can prove who they are | Done |
 | The restaurant's open orders, read under a staff session | Done |
 | The board on a page staff sign in to | Done |
-| Row-level security on a read, so a menu query drops its scope too | Planned |
+| Row-level security on a read, so a menu query drops its scope too | Done |
 | A kitchen board a ticket can be acted on from | Planned |
 | Payment, as an option rather than a requirement | Planned |
 
@@ -761,6 +775,7 @@ each with the alternatives that were rejected and why.
 - [0030 Read the restaurant's open orders from the staff session, and name the table rather than its code](docs/adr/0030-read-the-restaurants-open-orders-from-the-staff-session.md)
 - [0031 Show the board on a page staff sign in to, and hold the token in memory alone](docs/adr/0031-show-the-board-on-a-page-staff-sign-in-to.md)
 - [0032 Show both pages in the README as dated captures, and defer the check that would hold them](docs/adr/0032-show-both-pages-as-dated-captures.md)
+- [0033 Read the menu under a policy, and split the resolve from the read](docs/adr/0033-read-the-menu-under-a-policy.md)
 
 ## Known limitations
 
@@ -886,9 +901,20 @@ each with the alternatives that were rejected and why.
   which spawns it and reads a record off one stream and a password off the other
   — so the split those two streams exist for is exercised rather than described.
   What is still not checked is the wording it prints them with.
-- Row-level security covers an order and its lines, written and read.
-  `restaurant`, `restaurant_table` and `menu_item` carry no policy, so on a read
-  of those the scope is still the query's job, exactly as it was.
+- Row-level security covers an order and its lines, written and read, and a menu
+  item on a read. `restaurant` and `restaurant_table` carry no policy and cannot:
+  they are what a slug and a printed code are resolved through, so a policy on
+  either would have to be satisfied before the scope it defines could be known
+  ([ADR 0033](docs/adr/0033-read-the-menu-under-a-policy.md)).
+- A menu request holds a pooled connection across three statements where it held
+  one, because a resolve, a scope and a read cannot be one statement. Nothing is
+  deployed, so no number is at risk; it is named because it is a real cost and not
+  a free tidy-up.
+- Every test suite applies the whole migration sequence, and nothing checks that
+  it does. A list chosen by which files a suite reaches was fine while every
+  migration created something; an `alter` makes a short list silent, so the rule
+  is now the full prefix — held by a record and by review until the next
+  migration, which is where ADR 0033 puts the check.
 - **A menu item that has been ordered cannot be removed from the menu.** The
   order line's foreign key to `menu_item` is `NO ACTION`, so the delete is
   refused. Deleting the whole restaurant is refused too, and by the same

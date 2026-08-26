@@ -50,6 +50,7 @@ const MIGRATION_FILES = [
   '0002-create-restaurant-table.up.sql',
   '0003-create-table-order.up.sql',
   '0004-create-staff.up.sql',
+  '0005-scope-the-menu-read.up.sql',
 ]
 
 function migration(name: string): string {

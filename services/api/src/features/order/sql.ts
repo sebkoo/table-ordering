@@ -109,18 +109,22 @@ export const OPEN_WINDOW = '2 hours'
 /**
  * A table's open orders, with the lines on each.
  *
- * Nothing here names a restaurant. That is the point: `table_order` and
- * `table_order_line` carry policies whose `using` clause is this read's scope,
- * set on the transaction from the row the printed code resolved to, so a
- * predicate here would be the statement taking back a job the policy now has.
- * `menu_item` carries no policy, so its join scopes itself -- against
- * `line.restaurant_id`, which the policy has already filtered, and not against
- * anything the caller sent.
+ * Nothing here names a restaurant. That is the point: `table_order`,
+ * `table_order_line` and, since `0005`, `menu_item` all carry policies whose
+ * `using` clause is this read's scope, set on the transaction from the row the
+ * printed code resolved to, so a predicate here would be the statement taking
+ * back a job the policies now have.
  *
- * The joins are LEFT JOINs for the reason the menu slice's `MENU_FOR_RESTAURANT`
- * gives: an order carrying no line comes back as one row with null line columns, which is
- * an order with nothing on it rather than an order that vanished. An inner join
- * cannot tell those apart.
+ * The second column on the join to `menu_item` is the exception, and it stays.
+ * It was written for the invariant it serves -- an item belongs to the same
+ * restaurant as the line naming it -- and the policy now scopes that table too,
+ * so no condition can tell the two apart. Removing it would be an unobservable
+ * edit to a security-relevant statement, which is a worse trade than a redundant
+ * predicate. ADR 0033.
+ *
+ * The joins are LEFT JOINs so that an order carrying no line comes back as one
+ * row with null line columns, which is an order with nothing on it rather than an
+ * order that vanished. An inner join cannot tell those apart.
  *
  * The sort is by `placed_at` before `id` because two sends can share a
  * transaction start time, and by `id` rather than nothing so that a tie is

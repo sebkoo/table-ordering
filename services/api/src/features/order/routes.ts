@@ -253,8 +253,8 @@ type OpenOrder = { id: string; lines: { name: string; quantity: number }[] }
  *
  * A row whose line columns are null is the left join reporting an order with
  * nothing on it, which is an order with an empty list rather than an order to
- * drop -- the same reading, for the same reason, that the menu slice gives a
- * restaurant with no available item.
+ * drop. "No order" and "an order with nothing on it" are different answers, and a
+ * reader that cannot tell them apart reports the second as the first.
  */
 function group(rows: readonly OpenOrderRow[]): OpenOrder[] {
   const orders = new Map<string, OpenOrder>()

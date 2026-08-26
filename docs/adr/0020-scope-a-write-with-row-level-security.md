@@ -149,6 +149,16 @@ here are `for all`, so they cover a select as well, and
 [ADR 0026](0026-read-a-tables-open-orders-by-its-printed-code.md) reads an order
 back under them without adding a migration.
 
+That roadmap row is closed by
+[ADR 0033](0033-read-the-menu-under-a-policy.md), in the shape predicted here:
+`0005` puts `menu_item` under a policy and the menu routes become a resolve and a
+scoped read. The prediction was right about the mechanism and short by one fact —
+the menu routes carried no transaction at all, not merely a predicate — so the
+split was forced rather than chosen. `restaurant` and `restaurant_table` keep the
+position this paragraph gives them, and the rejection below of row-level security
+*instead of* the composite foreign keys is untouched: `0033` adds a policy beside
+those keys, not in place of them.
+
 **ADR 0015's trigger has not fired**, and this was run rather than reasoned.
 Re-applying `0003` to a schema that already has it prints
 
