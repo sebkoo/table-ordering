@@ -76,7 +76,9 @@ export type WorkflowJob = {
 }
 
 export type RunStepCommand = {
-  /** 1-based line in README.md where the command begins. */
+  /** Repository-relative path of the file carrying it. */
+  path: string
+  /** 1-based line where the command begins, which is the line a reader has to edit. */
   line: number
   /** The command, with backslash continuations joined into one line. */
   text: string
@@ -462,11 +464,12 @@ export function workflowJobTimeoutRule(input: ConventionInput): Rule {
  * for narrowing this rule, which is deliberately not built here: no run step
  * yet issues a statement PostgreSQL refuses inside a transaction block.
  *
- * The subjects come from `collectInput`, which reads the README's shell-tagged
- * blocks. The rule's coverage therefore rests on a fence's info string, and the
- * vacuity contract only catches losing *every* subject: retag one block of two
- * and this passes over the remaining one. That limit is recorded in ADR 0016
- * rather than papered over here.
+ * The subjects come from `collectInput`, which reads the shell-tagged blocks of
+ * README and of every markdown document directly under `docs/`. The rule's
+ * coverage therefore rests on a fence's info string, and the vacuity contract
+ * only catches losing *every* subject: retag one block of two and this passes
+ * over the remaining one. That limit is recorded in ADR 0016 rather than papered
+ * over here.
  */
 export function runStepSingleTransactionRule(input: ConventionInput): Rule {
   return {
@@ -478,7 +481,7 @@ export function runStepSingleTransactionRule(input: ConventionInput): Rule {
       for (const command of input.runStepCommands) {
         if (!command.text.includes(SINGLE_TRANSACTION)) {
           violations.push({
-            where: `README.md line ${command.line}`,
+            where: `${command.path} line ${command.line}`,
             detail: `required: ${SINGLE_TRANSACTION}\n        command:  ${command.text}`,
           })
         }
@@ -1073,7 +1076,60 @@ const FENCE = /^```(\S*)\s*$/
 const PSQL = /\bpsql\b/
 
 /**
- * Every `psql` invocation in README.md's shell-tagged blocks.
+ * The documents that can carry a run step: README, and every markdown document
+ * directly under `docs/`.
+ *
+ * README alone was the whole sight until ADR 0041 moved `## Run it in full` out
+ * of it. One of the three invocations went with that section, and a rule reading
+ * only README would have read the remaining two and passed -- a partial move,
+ * which the vacuity contract cannot see because it only catches losing every
+ * subject. The walk arrives with that first subject, and adds none before it:
+ * no document under `docs/` carried a run step until this one did.
+ *
+ * A directory rather than a second filename, for the reason ADR 0039 recorded
+ * against `open-window-restated` and ADR 0040 then acted on: naming one document
+ * re-creates the blindness on the file beside it.
+ *
+ * It reads the files directly under `docs/` and never descends, so `docs/adr/`
+ * is outside the sight by construction rather than by a filter somebody has to
+ * remember to keep. A record quotes what a run once printed -- ADR 0020 carries
+ * a `psql` line with no flag on it -- and a rule that went red over a decision
+ * for being true on its own date is a rule that gets bypassed.
+ *
+ * The set is written out here rather than shared with `readWindowMentions`,
+ * which walks the same directory today. The two coincide by coincidence and not
+ * by concept: that rule excludes `services/` because of the durations it carries,
+ * and this one has no such reason. One constant for both would make two rules'
+ * sight one thing to change.
+ */
+const RUN_STEP_PATHS = ['README.md'] as const
+const RUN_STEP_SOURCE = ['docs'] as const
+
+function readRunStepCommands(root: string): RunStepCommand[] {
+  const commands: RunStepCommand[] = []
+
+  const paths = [
+    ...RUN_STEP_PATHS,
+    ...names(join(root, ...RUN_STEP_SOURCE), 'file')
+      .filter((file) => file.endsWith('.md'))
+      .map((file) => `${RUN_STEP_SOURCE.join('/')}/${file}`),
+  ]
+
+  for (const path of paths) {
+    let text: string
+    try {
+      text = readFileSync(join(root, path), 'utf8')
+    } catch {
+      continue
+    }
+    commands.push(...readShellPsqlCommands(path, text))
+  }
+
+  return commands
+}
+
+/**
+ * Every `psql` invocation in one document's shell-tagged blocks.
  *
  * Continuations are joined before matching. A line-based reader fails in both
  * directions on the same file: given a command whose flag sits on the next
@@ -1083,11 +1139,9 @@ const PSQL = /\bpsql\b/
  * The line number reported is where the command begins, which is the line a
  * reader has to edit.
  */
-function readRunStepCommands(readme: string | null): RunStepCommand[] {
-  if (readme === null) return []
-
+function readShellPsqlCommands(path: string, text: string): RunStepCommand[] {
   const commands: RunStepCommand[] = []
-  const lines = readme.split('\n')
+  const lines = text.split('\n')
   let shell = false
   let fenced = false
   let pending: RunStepCommand | null = null
@@ -1115,7 +1169,7 @@ function readRunStepCommands(readme: string | null): RunStepCommand[] {
 
     if (!PSQL.test(text) && !continues) continue
 
-    const command: RunStepCommand = { line: index + 1, text }
+    const command: RunStepCommand = { path, line: index + 1, text }
     if (continues) {
       pending = command
       commands.push(command)
@@ -1518,7 +1572,7 @@ export function collectInput(root: string, requireHistory: boolean): ConventionI
     migrations: readMigrations(root),
     features: readFeatures(root),
     workflowJobs: readWorkflowJobs(root),
-    runStepCommands: readRunStepCommands(readme),
+    runStepCommands: readRunStepCommands(root),
     openWindow: readWindow(root),
     windowMentions: readWindowMentions(root),
     migrationDirectory: readMigrationDirectory(root),

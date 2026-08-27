@@ -113,7 +113,9 @@ function input(overrides: Partial<ConventionInput> = {}): ConventionInput {
       },
     ],
     workflowJobs: [{ path: '.github/workflows/ci.yml', job: 'verify', timeoutMinutes: 10 }],
-    runStepCommands: [{ line: 12, text: 'psql -U u -d d --single-transaction < 0001.up.sql' }],
+    runStepCommands: [
+      { path: 'README.md', line: 12, text: 'psql -U u -d d --single-transaction < 0001.up.sql' },
+    ],
     openWindow: '2 hours',
     windowMentions: [{ path: 'README.md', line: 113, text: 'two hours' }],
     migrationDirectory: ['0001-create-menu.down.sql', '0001-create-menu.up.sql'],
@@ -405,7 +407,13 @@ function commitAll(dir: string, message: string, when?: string): void {
 describe('run-step-single-transaction', () => {
   function withCommands(...texts: string[]): Rule {
     return runStepSingleTransactionRule(
-      input({ runStepCommands: texts.map((text, index) => ({ line: index + 1, text })) }),
+      input({
+        runStepCommands: texts.map((text, index) => ({
+          path: 'README.md',
+          line: index + 1,
+          text,
+        })),
+      }),
     )
   }
 
@@ -443,10 +451,20 @@ describe('run-step-single-transaction', () => {
   })
 })
 
-describe('the run steps a README actually carries', () => {
+describe('the run steps a repository actually carries', () => {
   function readmeWith(body: string): RunStepCommand[] {
     const dir = newRepo()
     writeFileSync(join(dir, 'README.md'), body, 'utf8')
+    return collectInput(dir, false).runStepCommands
+  }
+
+  function documentsWith(files: Record<string, string>): RunStepCommand[] {
+    const dir = newRepo()
+    for (const [path, body] of Object.entries(files)) {
+      const full = join(dir, ...path.split('/'))
+      mkdirSync(dirname(full), { recursive: true })
+      writeFileSync(full, body, 'utf8')
+    }
     return collectInput(dir, false).runStepCommands
   }
 
@@ -459,14 +477,16 @@ describe('the run steps a README actually carries', () => {
         `\`\`\`sh\n${REDIRECT}\n\`\`\`\n\n\`\`\`sh\n${HEREDOC}\ninsert into x;\nSQL\n\`\`\`\n`,
       ),
     ).toEqual([
-      { line: 2, text: REDIRECT },
-      { line: 6, text: HEREDOC },
+      { path: 'README.md', line: 2, text: REDIRECT },
+      { path: 'README.md', line: 6, text: HEREDOC },
     ])
   })
 
   it('joins a continuation, so a flag on the next line still belongs to the command', () => {
     const commands = readmeWith('```sh\npsql -U u -d d \\\n  --single-transaction < x.sql\n```\n')
-    expect(commands).toEqual([{ line: 2, text: 'psql -U u -d d --single-transaction < x.sql' }])
+    expect(commands).toEqual([
+      { path: 'README.md', line: 2, text: 'psql -U u -d d --single-transaction < x.sql' },
+    ])
     expect(verdictOf(runStepSingleTransactionRule(input({ runStepCommands: commands })))).toBe(
       'PASS',
     )
@@ -479,6 +499,7 @@ describe('the run steps a README actually carries', () => {
       ),
     ).toEqual([
       {
+        path: 'README.md',
         line: 2,
         text: 'docker compose exec -T postgres psql -U u -d d --single-transaction < x.sql',
       },
@@ -506,7 +527,7 @@ describe('the run steps a README actually carries', () => {
 
   it('reports the line the command begins on, which is the line to edit', () => {
     expect(readmeWith(`# Title\n\nSome prose.\n\n\`\`\`sh\n${HEREDOC}\nSQL\n\`\`\`\n`)).toEqual([
-      { line: 6, text: HEREDOC },
+      { path: 'README.md', line: 6, text: HEREDOC },
     ])
   })
 
@@ -536,6 +557,65 @@ describe('the run steps a README actually carries', () => {
     expect(verdictOf(runStepSingleTransactionRule(input({ runStepCommands: compliant })))).toBe(
       'PASS',
     )
+  })
+
+  // The widening's first subject is `docs/run-it-in-full.md`, and the document
+  // beside it carries no run step today. A selector naming one document by name
+  // would find the first and stay blind to the second, which is the residue ADR
+  // 0039 wrote down rather than repaired: the sight has to be the directory, or
+  // it is re-created one file over. This is the shape ADR 0040 gave
+  // `open-window-restated`, in this rule's terms.
+  it('reads a run step in every document under docs, not in one named file', () => {
+    expect(
+      documentsWith({
+        'docs/run-it-in-full.md': `\`\`\`sh\n${REDIRECT}\n\`\`\`\n`,
+        'docs/how-a-request-is-served.md': `\`\`\`sh\n${HEREDOC}\nSQL\n\`\`\`\n`,
+      }),
+    ).toEqual([
+      { path: 'docs/how-a-request-is-served.md', line: 2, text: HEREDOC },
+      { path: 'docs/run-it-in-full.md', line: 2, text: REDIRECT },
+    ])
+  })
+
+  // A violation has to say which file to open. While the sight was one file the
+  // name could be a literal; it cannot be now, and a violation still naming
+  // README would send a reader to the wrong document.
+  it('names the document a violation is in, rather than README', () => {
+    const commands = documentsWith({
+      'docs/run-it-in-full.md': `\`\`\`sh\n${HEREDOC}\nSQL\n\`\`\`\n`,
+    })
+    const outcome = runStepSingleTransactionRule(input({ runStepCommands: commands })).check()
+    expect(outcome.status).toBe('fail')
+    if (outcome.status !== 'fail') return
+    expect(outcome.violations.map((violation) => violation.where)).toEqual([
+      'docs/run-it-in-full.md line 2',
+    ])
+  })
+
+  // ADR 0028's exclusion in this rule's terms. A record quotes what a run once
+  // printed -- ADR 0020 carries a `psql` line with no flag on it -- so a walk
+  // that descended would report a decision for being true on its own date. The
+  // walk reads the files directly under `docs/` and never descends, so
+  // `docs/adr/` is outside the sight by construction rather than by a filter
+  // somebody has to remember to keep.
+  it('reads no run step out of a record under docs/adr', () => {
+    expect(
+      documentsWith({
+        'docs/adr/0016-make-every-run-step-atomic.md': `\`\`\`sh\n${HEREDOC}\nSQL\n\`\`\`\n`,
+      }),
+    ).toEqual([])
+  })
+
+  // The census, by site rather than by count, so a third document carrying a run
+  // step says which one it is instead of moving a number. It is a tripwire by
+  // design: the first `psql` fence written into a new document under `docs/`
+  // reddens this, and the repair is to name that document here. ADR 0041.
+  it('finds run steps in the two documents this tree carries, and in no others', () => {
+    const commands = collectInput(ROOT, false).runStepCommands
+    expect([...new Set(commands.map((command) => command.path))]).toEqual([
+      'README.md',
+      'docs/run-it-in-full.md',
+    ])
   })
 })
 
@@ -1202,26 +1282,31 @@ jobs:
 describe('open-window-restated', () => {
   const PAGE = 'apps/guest/src/features/order/placed.tsx'
   const LIMITS = 'docs/known-limitations.md'
+  const FULL = 'docs/run-it-in-full.md'
+  const TABLE = 'docs/what-happens-at-the-table.md'
   const SOURCE = 'services/api/src/features/order/sql.ts'
 
   /**
-   * The seven the tree carries, in the shape it carries them since ADR 0040:
-   * three in README, three in the document the limitations moved to, one on the
-   * guest's page. The lines are read from the collector rather than by eye.
+   * The seven the tree carries, in the shape it carries them since ADR 0041:
+   * one on the guest's page and six across four documents under `docs/`. README
+   * carries none, and stays in `RESTATING_PATHS` anyway -- the list names where a
+   * restatement has to be checked, not where one is, and README is the file most
+   * likely to gain the next one. The lines are read from the collector rather
+   * than by eye.
    *
    * Nothing compares this constant with the tree again, so it goes stale
-   * silently -- its lines already had once before this recapture. That is the
-   * class ADR 0040 names, and it is the same residue family as a relative link
-   * no rule resolves.
+   * silently -- its lines have now moved under it twice. That is the class ADR
+   * 0040 names, and it is the same residue family as a relative link no rule
+   * resolves.
    */
   const RESTATED: WindowMention[] = [
-    { path: 'README.md', line: 219, text: 'two hours' },
-    { path: 'README.md', line: 225, text: 'Two hours' },
-    { path: 'README.md', line: 579, text: 'two hours' },
     { path: PAGE, line: 56, text: 'two hours' },
     { path: LIMITS, line: 20, text: 'two hours' },
     { path: LIMITS, line: 32, text: 'two-hour' },
     { path: LIMITS, line: 83, text: 'two hours' },
+    { path: FULL, line: 52, text: 'two hours' },
+    { path: TABLE, line: 105, text: 'two hours' },
+    { path: TABLE, line: 111, text: 'Two hours' },
   ]
 
   function withWindow(openWindow: string | null, windowMentions = RESTATED): Rule {
@@ -1242,13 +1327,13 @@ describe('open-window-restated', () => {
 
     expect(outcome.subjects).toBe(7)
     expect(outcome.violations.map((violation) => violation.where)).toEqual([
-      'README.md line 219',
-      'README.md line 225',
-      'README.md line 579',
       `${PAGE} line 56`,
       `${LIMITS} line 20`,
       `${LIMITS} line 32`,
       `${LIMITS} line 83`,
+      `${FULL} line 52`,
+      `${TABLE} line 105`,
+      `${TABLE} line 111`,
     ])
     expect(outcome.violations[0]?.detail).toBe('says two hours, OPEN_WINDOW says 90 minutes')
   })
@@ -1283,7 +1368,7 @@ describe('open-window-restated', () => {
       detail: 'OPEN_WINDOW is not one duration: 2 hours 30 minutes',
     })
     expect(outcome.violations[1]).toEqual({
-      where: 'README.md line 219',
+      where: `${PAGE} line 56`,
       detail: 'restates the window as two hours, and there is nothing to compare it with',
     })
   })
