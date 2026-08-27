@@ -925,6 +925,7 @@ each with the alternatives that were rejected and why.
 - [0034 Clear a ticket by recording when it was served, and leave the guest's list alone](docs/adr/0034-clear-a-ticket-by-recording-when-it-was-served.md)
 - [0035 Check a suite's migration list against the directory, by two keys](docs/adr/0035-check-a-suites-migration-list-against-the-directory.md)
 - [0036 Record a round as paid, gate nothing on it, and leave the bill to the sitting](docs/adr/0036-record-a-round-as-paid-and-gate-nothing-on-it.md)
+- [0037 Produce the demo from a script in the tree, and publish it as a release asset](docs/adr/0037-produce-the-demo-from-a-script-in-the-tree.md)
 
 ## Known limitations
 

@@ -131,6 +131,9 @@ that creates the thing it governs.
   `update` on exactly the column the act records and on no other, so a statement
   naming another is refused by the privilege rather than by review, and the
   refusal holds for a statement nobody read.
+- A moving picture of the product is produced by a script in this tree and
+  published as a release asset, never committed. No video byte enters the tree,
+  and the revision it was taken at is the tag it hangs on.
 
 ## Change size
 
