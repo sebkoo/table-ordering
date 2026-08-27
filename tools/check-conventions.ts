@@ -1142,16 +1142,31 @@ function readRunStepCommands(readme: string | null): RunStepCommand[] {
 const WINDOW_DECLARATION = /^export const OPEN_WINDOW = '([^']*)'$/m
 
 /**
- * The documents that describe the system as it stands.
+ * The documents that describe the system as it stands: two named files, and
+ * every markdown document directly under `docs/`.
  *
- * Two paths, not a directory. `services/api/src/features/order/sql.ts` carries
- * `five minutes` in the paragraph above the value, and the order suite carries
- * `10 minutes`, `5 minutes`, `100 minutes` and `3 hours` as fixture ages -- real
- * durations that are not the window, which a selector aimed at a directory would
- * report. A restatement outside these two is invisible, which ADR 0028 records as
- * this rule's limit rather than hiding.
+ * Named files on the code side, and never a source directory.
+ * `services/api/src/features/order/sql.ts` carries `five minutes` in the
+ * paragraph above the value, and the order suite carries `10 minutes`,
+ * `5 minutes`, `100 minutes` and `3 hours` as fixture ages -- real durations
+ * that are not the window, which a selector aimed at `services/` would report.
+ *
+ * `docs/` carries no duration of that kind, and it carries the block ADR 0040
+ * moved out of README with three restatements in it. The walk is what stops the
+ * blindness being re-created one file over: `docs/how-a-request-is-served.md`
+ * holds no duration today and is exactly where the next one would land unseen.
+ *
+ * It reads the files directly under `docs/` and never descends, so `docs/adr/`
+ * is outside the sight by construction rather than by a filter somebody has to
+ * remember to keep. That exclusion is ADR 0028's: a record's window is a capture,
+ * true of that decision on its own date, and a rule that could only go green by
+ * rewriting a record is a rule that gets bypassed.
+ *
+ * A restatement outside this set is invisible, which ADR 0028 records as this
+ * rule's limit rather than hiding.
  */
 const RESTATING_PATHS = ['README.md', 'apps/guest/src/features/order/placed.tsx'] as const
+const RESTATING_SOURCE = ['docs'] as const
 
 /**
  * A duration in prose: a number, then the unit.
@@ -1181,7 +1196,14 @@ function readWindow(root: string): string | null {
 function readWindowMentions(root: string): WindowMention[] {
   const mentions: WindowMention[] = []
 
-  for (const path of RESTATING_PATHS) {
+  const paths = [
+    ...RESTATING_PATHS,
+    ...names(join(root, ...RESTATING_SOURCE), 'file')
+      .filter((file) => file.endsWith('.md'))
+      .map((file) => `${RESTATING_SOURCE.join('/')}/${file}`),
+  ]
+
+  for (const path of paths) {
     let text: string
     try {
       text = readFileSync(join(root, path), 'utf8')

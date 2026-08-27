@@ -154,3 +154,22 @@ correct exactly when the four rules hold their counts across it — so what make
 counts load-bearing is the break table driven against this commit rather than a new test.
 That is a departure from the loop's usual second step, and it is recorded here rather than
 left to be noticed.
+
+## Addendum, 2026-08-27
+
+The repair this record named has been made, in
+[ADR 0040](0040-widen-the-windows-sight-to-the-documents.md). What is above stays as it was
+written on its own date; this section records what happened when it did.
+
+What the rejected alternative said, verbatim:
+
+> The reading benefit is real and the repair is available: widen
+> `RESTATING_PATHS` first, then move the block. That is a later beat's decision.
+
+The later beat is ADR 0040. The selector was widened first, in the same commit and minutes
+ahead of the block that gave it its first subject, and `Known limitations` then moved to
+`docs/known-limitations.md` with `open-window-restated` still reading seven.
+
+One number here is wrong, and is left as written. This record says the block holds "the
+twelve `docs/adr/` links"; it held ten on this record's own date, and eleven when they were
+rewritten two commits later.

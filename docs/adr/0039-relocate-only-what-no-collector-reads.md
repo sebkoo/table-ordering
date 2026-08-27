@@ -189,3 +189,35 @@ inherits: its content is invariance. The move is correct exactly when the three 
 across it, so what makes them load-bearing is the break table driven against this commit
 rather than a new test. That is a departure from the loop's second step, recorded here
 rather than left to be noticed.
+
+## Addendum, 2026-08-27
+
+The successor this record named has landed, in
+[ADR 0040](0040-widen-the-windows-sight-to-the-documents.md). What is above stays as it
+was written on its own date; this section records what happened when it did.
+
+**The promise, verbatim:**
+
+> **`RESTATING_PATHS` widens with its first subject. The widening and the move of
+> `Known limitations` to `docs/known-limitations.md` land in the next commit as one
+> behaviour** — one selector widened, one test proving the widened path finds a duration in a
+> `docs/` file, one verbatim move, and `open-window-restated`'s seven subjects predicted split
+> across the two files.
+
+**Kept, on every term.** The selector gained a walk of the markdown documents directly under
+`docs/` rather than a second filename, which is the shape `readImageReferences` already uses
+and which leaves `docs/adr/` outside the sight by construction. Two conditions landed with
+it, one of them the promised proof that a duration in a `docs/` file is now found. The 338
+body lines moved byte for byte, with the eleven record links rewritten and nothing else
+touched. The count held at seven.
+
+One term needed reading before it could be checked. "The two files" are the two files of the
+move — README and the document the block landed in. The seventh subject is on the guest's
+`placed.tsx`, untouched by that commit and never in question, so the split shown is three
+ways: README 3, `docs/known-limitations.md` 3, the guest's page 1.
+
+**The residue this record wrote down is half discharged.**
+`docs/how-a-request-is-served.md` is now read by `open-window-restated` — a duration written
+into it is no longer invisible, and the break table drove that against the tree. It remains
+outside `capture-caption-resolves`: a picture put in it is still invisible, and what widens
+that set is the first picture that appears there.

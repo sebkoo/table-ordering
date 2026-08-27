@@ -1201,17 +1201,27 @@ jobs:
 
 describe('open-window-restated', () => {
   const PAGE = 'apps/guest/src/features/order/placed.tsx'
+  const LIMITS = 'docs/known-limitations.md'
   const SOURCE = 'services/api/src/features/order/sql.ts'
 
-  /** The seven the tree carries, on the lines it carries them on. */
+  /**
+   * The seven the tree carries, in the shape it carries them since ADR 0040:
+   * three in README, three in the document the limitations moved to, one on the
+   * guest's page. The lines are read from the collector rather than by eye.
+   *
+   * Nothing compares this constant with the tree again, so it goes stale
+   * silently -- its lines already had once before this recapture. That is the
+   * class ADR 0040 names, and it is the same residue family as a relative link
+   * no rule resolves.
+   */
   const RESTATED: WindowMention[] = [
-    { path: 'README.md', line: 113, text: 'two hours' },
-    { path: 'README.md', line: 119, text: 'Two hours' },
-    { path: 'README.md', line: 409, text: 'two hours' },
-    { path: 'README.md', line: 580, text: 'two hours' },
-    { path: 'README.md', line: 592, text: 'two-hour' },
-    { path: 'README.md', line: 604, text: 'two hours' },
+    { path: 'README.md', line: 219, text: 'two hours' },
+    { path: 'README.md', line: 225, text: 'Two hours' },
+    { path: 'README.md', line: 579, text: 'two hours' },
     { path: PAGE, line: 56, text: 'two hours' },
+    { path: LIMITS, line: 20, text: 'two hours' },
+    { path: LIMITS, line: 32, text: 'two-hour' },
+    { path: LIMITS, line: 83, text: 'two hours' },
   ]
 
   function withWindow(openWindow: string | null, windowMentions = RESTATED): Rule {
@@ -1232,13 +1242,13 @@ describe('open-window-restated', () => {
 
     expect(outcome.subjects).toBe(7)
     expect(outcome.violations.map((violation) => violation.where)).toEqual([
-      'README.md line 113',
-      'README.md line 119',
-      'README.md line 409',
-      'README.md line 580',
-      'README.md line 592',
-      'README.md line 604',
+      'README.md line 219',
+      'README.md line 225',
+      'README.md line 579',
       `${PAGE} line 56`,
+      `${LIMITS} line 20`,
+      `${LIMITS} line 32`,
+      `${LIMITS} line 83`,
     ])
     expect(outcome.violations[0]?.detail).toBe('says two hours, OPEN_WINDOW says 90 minutes')
   })
@@ -1273,7 +1283,7 @@ describe('open-window-restated', () => {
       detail: 'OPEN_WINDOW is not one duration: 2 hours 30 minutes',
     })
     expect(outcome.violations[1]).toEqual({
-      where: 'README.md line 113',
+      where: 'README.md line 219',
       detail: 'restates the window as two hours, and there is nothing to compare it with',
     })
   })
@@ -1363,6 +1373,35 @@ describe('the window a repository restates', () => {
       { path: 'README.md', line: 3, text: 'two hours' },
       { path: PAGE, line: 2, text: 'two hours' },
     ])
+  })
+
+  // The widening's first subject is `docs/known-limitations.md`, and the file
+  // beside it carries no duration today. A selector naming one document by name
+  // would find the first and stay blind to the second, which is the residue ADR
+  // 0039 wrote down rather than repaired: the sight has to be the directory, or
+  // it is re-created one file over.
+  it('reads a restatement in every document under docs, not in one named file', () => {
+    const collected = repoWith({
+      'docs/known-limitations.md': 'Anyone holding the code reads the last two hours of it.\n',
+      'docs/how-a-request-is-served.md': 'The read is scoped, and bounded to two hours.\n',
+    })
+    expect(collected.windowMentions).toEqual([
+      { path: 'docs/how-a-request-is-served.md', line: 1, text: 'two hours' },
+      { path: 'docs/known-limitations.md', line: 1, text: 'two hours' },
+    ])
+  })
+
+  // ADR 0028: a record's window is a capture, true of that decision on its own
+  // date, and a rule that could only go green by rewriting a record is a rule
+  // that gets bypassed. The walk reads the files directly under `docs/` and
+  // never descends, so `docs/adr/` stays outside the sight by construction
+  // rather than by a filter somebody has to remember to keep.
+  it('reads no restatement out of a record under docs/adr', () => {
+    const collected = repoWith({
+      'docs/adr/0028-check-the-window-where-it-is-restated.md':
+        'The window was two hours on the date this was decided.\n',
+    })
+    expect(collected.windowMentions).toEqual([])
   })
 })
 
