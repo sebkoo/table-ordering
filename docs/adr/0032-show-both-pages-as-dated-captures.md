@@ -147,3 +147,95 @@ recaptured or removed.
 Reading the README now costs a reader three image requests to GitHub. Nothing
 this repository serves is affected: the invariant about origins is about the
 pages, and these bytes are in the repository.
+
+## Addendum, 2026-08-26
+
+The trigger this record named has fired. What is above stays as it was written
+on its own date; this section records what happened when it did.
+
+**The deferred check is taken.** What was deferred, verbatim:
+
+> The check is deferred, not judged infeasible. A caption's revision resolves
+> against history, and a rule could require every image reference to name one, to
+> resolve, and to carry alt text — it would fail before this commit on zero
+> subjects and pass after on three, which is the shape ADR 0004 asks for. What is
+> missing is a second writer: a caption-drift check built before anything has ever
+> been recaptured polices a variation nobody has observed. **It lands with the
+> first recapture, or with the first image a later commit adds.**
+
+The recapture below is the first, so the rule lands with it rather than being
+deferred a second time. The rejected alternative above — "A rule holding the
+captions, landing here" — lost on that trigger and on change size, and the
+trigger is what has now changed.
+
+**The rule is `capture-caption-resolves`,** the ninth. It takes two collectors,
+in the split this repository already uses for `migrationDirectory` against
+`migrationLists` and `openWindow` against `windowMentions`: the authority arrives
+as one list, the subjects as another, and the rule is what compares them.
+`historyRevisions` is every commit's full sha, newest first, and null when the
+repository is unborn — a collector of its own rather than a field on `Commit`,
+which carries what the message policy asks about and nothing else.
+`imageReferences` is every inline image whose target names a path in this
+repository, with the paragraph that follows it and its soft wraps joined.
+
+Per reference it asks four questions: that alt text is there, that the caption
+names a revision, that it names exactly one, and that the one is a prefix of
+exactly one sha. **Exactly one, not at least one.** A picture came from a single
+revision, and a caption naming two dates nothing a reader can use — which is the
+drift this rule is for, since a caption goes stale by gaining a revision rather
+than by losing one. A prefix, not a containment: `8f828f7` occurs inside this
+tree's own `a8f828f795…` without being its prefix, and a containment test would
+call that resolved.
+
+The revision is read as inline code — hex, seven to forty characters, between
+backticks — and never sniffed out of prose. README carries about thirty
+undelimited runs of seven or more hex characters in the UUIDs of its JSON
+examples, and English supplies more: `defaced` and `effaced` are seven letters
+drawn entirely from a to f. Inside a caption the backtick is what declares that a
+token is a revision, and a rule reading prose instead would report violations
+against words.
+
+The history branch is asked first, and the order is load-bearing for the reason
+`readme-status-date` gives: only that branch converts under `--require-history`,
+so a rule that asked about the documents first would hide a missing history
+behind a verdict nothing can turn red.
+
+**The board is recaptured, and its caption names `0fe409d`.** That revision's
+board carries both controls — a ticket can be cleared, and a round can be
+recorded as paid — which is what ADR 0034 said a recapture had to wait for. The
+other two captures are untouched and still name `a8f828f`: `git diff
+a8f828f..0fe409d -- apps/` moves `board.tsx` alone, so the guest's page and the
+sign-in render what they rendered. The fixture is the one this record pins, sent
+in the order the board reads in, so the only difference in the pixels is the code
+that made them.
+
+**The counts move.** `verify` prints seventeen verdict lines where it printed
+sixteen, and reports `9 checks` where it reported eight. The sentence above —
+"The seven rules see three new files and report the same subjects they did
+before" — was true of the tree it was written for; the rule count has moved twice
+since, and this is the second.
+
+**A shallow checkout would have broken the resolve clause, and does not.**
+`.github/workflows/ci.yml` already fetches the whole history, with the reason
+beside it: "The convention checks read commit history, so a shallow clone would
+change what they are able to evaluate." That was read before this rule was
+written rather than discovered by a red run, and it is quoted here so the next
+reader knows the question was asked. A workflow that fetched depth 1 would need
+either an explicit depth or a weaker clause, and neither was needed.
+
+**What the rule still does not hold, and where it cannot see.** It holds a
+caption's form and never its pixels. No program compares a picture with the page
+it shows, so a caption naming a real revision above an image that revision never
+rendered passes — the honest line, in the same place this record already put it.
+The sentence above about collectors is still true as written: this one reads
+documents, not `docs/images/`. Its path set is `README.md`, `AGENTS.md` and
+`docs/adr/*.md`, so a picture added to `CLAUDE.md` or under `.claude/skills/` is
+invisible, and what widens the set is the first picture that appears there rather
+than a prediction about one — the posture ADR 0016, ADR 0028 and ADR 0035 take
+with their own limits.
+
+Reading the records is not the thing `AGENTS.md` rules out for
+`open-window-restated`. That rule compares prose against a value that moves, so a
+record it read would go red for having been written on its own date. This one
+compares against history, which only ever grows: a revision that resolves today
+resolves forever. The check is monotone, and the window's is not.

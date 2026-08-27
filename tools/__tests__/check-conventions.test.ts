@@ -15,12 +15,14 @@ import { afterAll, describe, expect, it } from 'vitest'
 import {
   type Commit,
   type ConventionInput,
+  captureCaptionResolvesRule,
   collectInput,
   commitMessagePolicyRule,
   createRules,
   featureHasTestRule,
   formatReports,
   hasFailure,
+  type ImageReference,
   type MigrationList,
   migrationHasDownRule,
   migrationListFullPrefixRule,
@@ -30,6 +32,7 @@ import {
   readmeStatusDateRule,
   runRules,
   runStepSingleTransactionRule,
+  type Violation,
   type WindowMention,
   workflowJobTimeoutRule,
 } from '../check-conventions.ts'
@@ -64,6 +67,20 @@ const WHOLE_DOWN = [
 ]
 
 const SUITE = 'services/api/src/features/menu/menu.test.ts'
+
+/**
+ * A revision this tree really carries, and a second that nothing does.
+ *
+ * Full shas, because the rule resolves a caption's short form by prefix against
+ * whole ones. `8f828f7` below is inside the first and is not its prefix, which
+ * is the pair a containment test calls resolved and a prefix test does not.
+ */
+const SHA_ONE = 'a8f828f7957384d6030b637a20fc5a9a6b98b5e7'
+const SHA_TWO = '0fe409d405eac5654f36d2ff60c400525d1c527d'
+
+/** Two shas differing only after the seventh character, so a short form is ambiguous. */
+const AMBIGUOUS_ONE = 'abc1234000000000000000000000000000000001'
+const AMBIGUOUS_TWO = 'abc1234000000000000000000000000000000002'
 
 const WORKFLOW_WITH_BOUND = `name: CI
 
@@ -104,6 +121,16 @@ function input(overrides: Partial<ConventionInput> = {}): ConventionInput {
       { path: SUITE, line: 75, name: 'MIGRATION_FILES', files: ['0001-create-menu.up.sql'] },
     ],
     migrationAppliers: [SUITE],
+    historyRevisions: [SHA_ONE],
+    imageReferences: [
+      {
+        path: 'README.md',
+        line: 20,
+        alt: 'A page of the product.',
+        target: 'docs/images/a-page.png',
+        caption: `*A page, captured at \`${SHA_ONE.slice(0, 7)}\`.*`,
+      },
+    ],
     requireHistory: false,
     ...overrides,
   }
@@ -284,30 +311,44 @@ describe('the vacuity contract', () => {
 // ---------------------------------------------------------------------------
 
 describe('the report', () => {
-  // The two history-dependent fields are both derived from git's unborn state,
+  // The three history-dependent fields are all derived from git's unborn state,
   // so they are null together or not at all, and an unborn repository's README
   // is untracked rather than modified. The file rules read the working tree, so
   // they evaluate before the first commit.
-  it('summarises a repository with no commits as two skips and six passes', () => {
+  it('summarises a repository with no commits as three skips and six passes', () => {
     const reports = runRules(
-      createRules(input({ commits: null, readmeCommitDates: null, readmeDirty: false })),
+      createRules(
+        input({
+          commits: null,
+          readmeCommitDates: null,
+          readmeDirty: false,
+          historyRevisions: null,
+        }),
+      ),
     )
     const text = formatReports(reports)
-    expect(text).toContain('8 checks: 6 PASS, 0 FAIL, 2 SKIP')
+    expect(text).toContain('9 checks: 6 PASS, 0 FAIL, 3 SKIP')
     expect(text).toContain('readme-status-date')
     expect(text).toContain('commit-message-policy')
     expect(hasFailure(reports)).toBe(false)
   })
 
-  it('summarises a clean committed tree as eight passes', () => {
+  it('summarises a clean committed tree as nine passes', () => {
     const reports = runRules(createRules(input({ requireHistory: true })))
-    expect(formatReports(reports)).toContain('8 checks: 8 PASS, 0 FAIL, 0 SKIP')
+    expect(formatReports(reports)).toContain('9 checks: 9 PASS, 0 FAIL, 0 SKIP')
     expect(hasFailure(reports)).toBe(false)
   })
 
   it('prints a reason beside every skip', () => {
     const reports = runRules(
-      createRules(input({ commits: null, readmeCommitDates: null, readmeDirty: false })),
+      createRules(
+        input({
+          commits: null,
+          readmeCommitDates: null,
+          readmeDirty: false,
+          historyRevisions: null,
+        }),
+      ),
     )
     for (const line of formatReports(reports).split('\n')) {
       if (!line.includes('SKIP')) continue
@@ -316,7 +357,7 @@ describe('the report', () => {
     }
   })
 
-  it('ships exactly the eight rules', () => {
+  it('ships exactly the nine rules', () => {
     expect(createRules(input()).map((rule) => rule.name)).toEqual([
       'readme-status-date',
       'commit-message-policy',
@@ -326,6 +367,7 @@ describe('the report', () => {
       'run-step-single-transaction',
       'open-window-restated',
       'migration-list-full-prefix',
+      'capture-caption-resolves',
     ])
   })
 })
@@ -606,6 +648,7 @@ describe('collectInput', () => {
     )
     expect(verdicts.get('readme-status-date')).toBe('FAIL')
     expect(verdicts.get('commit-message-policy')).toBe('FAIL')
+    expect(verdicts.get('capture-caption-resolves')).toBe('FAIL')
   })
 })
 
@@ -684,7 +727,7 @@ describe('an unborn repository whose README.md is untracked', () => {
     expect(collected.readmeDirty).toBe(false)
   })
 
-  it('skips the two history checks, and names missing history as the reason', () => {
+  it('skips the three history checks, and names missing history as the reason', () => {
     const reports = runRules(createRules(collectInput(bootstrapRepo(), false)))
     expect(reports.map((report) => report.verdict)).toEqual([
       'SKIP',
@@ -695,6 +738,7 @@ describe('an unborn repository whose README.md is untracked', () => {
       'PASS',
       'PASS',
       'PASS',
+      'SKIP',
     ])
     const readme = reports[0]?.outcome
     expect(readme?.status).toBe('skip')
@@ -703,7 +747,7 @@ describe('an unborn repository whose README.md is untracked', () => {
     }
   })
 
-  it('fails the two history checks under --require-history', () => {
+  it('fails the three history checks under --require-history', () => {
     const reports = runRules(createRules(collectInput(bootstrapRepo(), true)))
     expect(reports.map((report) => report.verdict)).toEqual([
       'FAIL',
@@ -714,6 +758,7 @@ describe('an unborn repository whose README.md is untracked', () => {
       'PASS',
       'PASS',
       'PASS',
+      'FAIL',
     ])
   })
 })
@@ -1612,5 +1657,267 @@ describe('the migration lists this repository carries', () => {
       status: 'pass',
       subjects: 10,
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('capture-caption-resolves', () => {
+  function reference(overrides: Partial<ImageReference> = {}): ImageReference {
+    return {
+      path: 'README.md',
+      line: 33,
+      alt: 'The board, with a row per open ticket.',
+      target: 'docs/images/staff-board.png',
+      caption: `*The board, captured at \`${SHA_ONE.slice(0, 7)}\`.*`,
+      ...overrides,
+    }
+  }
+
+  function withCaptures(
+    references: readonly ImageReference[],
+    revisions: string[] | null = [SHA_ONE, SHA_TWO],
+    requireHistory = false,
+  ): Rule {
+    return captureCaptionResolvesRule(
+      input({ imageReferences: [...references], historyRevisions: revisions, requireHistory }),
+    )
+  }
+
+  function violationsOf(rule: Rule): Violation[] {
+    const outcome = rule.check()
+    return outcome.status === 'fail' ? outcome.violations : []
+  }
+
+  it('passes a caption naming a revision that resolves', () => {
+    expect(verdictOf(withCaptures([reference()]))).toBe('PASS')
+  })
+
+  it('names the reference and the caption when no revision is in it', () => {
+    expect(violationsOf(withCaptures([reference({ caption: '*The board.*' })]))).toEqual([
+      { where: 'README.md line 33', detail: 'caption names no revision: *The board.*' },
+    ])
+  })
+
+  it('fails a revision that resolves against no commit', () => {
+    const rule = withCaptures([reference({ caption: '*The board, captured at `deadbee`.*' })])
+    expect(violationsOf(rule)).toEqual([
+      {
+        where: 'README.md line 33',
+        detail: 'caption names deadbee, which resolves against no commit',
+      },
+    ])
+  })
+
+  // The difference is placed where a weaker comparison would not look. `8f828f7`
+  // occurs inside SHA_ONE and is not its prefix, so a rule written with
+  // `.includes()` calls it resolved and this stays green for the wrong reason.
+  // A pair differing at the first character would tell the two apart either way
+  // and so would establish nothing about which comparison ran.
+  it('fails a revision contained in a sha that is not its prefix', () => {
+    expect(SHA_ONE).toContain('8f828f7')
+    expect(SHA_ONE.startsWith('8f828f7')).toBe(false)
+
+    const rule = withCaptures([reference({ caption: '*The board, captured at `8f828f7`.*' })])
+    expect(violationsOf(rule)).toEqual([
+      {
+        where: 'README.md line 33',
+        detail: 'caption names 8f828f7, which resolves against no commit',
+      },
+    ])
+  })
+
+  it('fails a revision that is a prefix of two commits', () => {
+    const rule = withCaptures(
+      [reference({ caption: '*The board, captured at `abc1234`.*' })],
+      [AMBIGUOUS_ONE, AMBIGUOUS_TWO],
+    )
+    expect(violationsOf(rule)).toEqual([
+      {
+        where: 'README.md line 33',
+        detail: 'caption names abc1234, which resolves against 2 commits',
+      },
+    ])
+  })
+
+  // Twelve characters, not seven. A reader who pasted a longer short form is
+  // naming the same commit, and a rule pinned to one width would reject it.
+  it('passes a longer prefix of the same commit', () => {
+    const long = SHA_ONE.slice(0, 12)
+    const rule = withCaptures([reference({ caption: `*The board, captured at \`${long}\`.*` })])
+    expect(verdictOf(rule)).toBe('PASS')
+  })
+
+  it('fails a reference carrying no alt text, and still reads its caption', () => {
+    expect(violationsOf(withCaptures([reference({ alt: '' })]))).toEqual([
+      {
+        where: 'README.md line 33',
+        detail: 'carries no alt text: docs/images/staff-board.png',
+      },
+    ])
+  })
+
+  // Both words are seven letters drawn entirely from a to f, so a rule that
+  // scanned prose for hex runs finds three revisions here and reddens on two
+  // English words. The backticks are what declare which token is a revision.
+  it('does not read a hex-shaped English word as a revision', () => {
+    const caption = `*The defaced sign was effaced before capture, at \`${SHA_ONE.slice(0, 7)}\`.*`
+    expect(/^[0-9a-f]{7}$/.test('defaced')).toBe(true)
+    expect(/^[0-9a-f]{7}$/.test('effaced')).toBe(true)
+
+    expect(verdictOf(withCaptures([reference({ caption })]))).toBe('PASS')
+  })
+
+  // Both resolve, so the resolve clause cannot be what fires. An at-least-one
+  // rule passes this fixture; only exactly-one reddens it, which is the whole
+  // difference between the two readings.
+  it('fails a caption naming two revisions, though both resolve', () => {
+    const caption = `*The board, captured at \`${SHA_ONE.slice(0, 7)}\`, superseding \`${SHA_TWO.slice(0, 7)}\`.*`
+    expect(violationsOf(withCaptures([reference({ caption })]))).toEqual([
+      {
+        where: 'README.md line 33',
+        detail: `caption names 2 revisions, and a picture came from one: ${SHA_ONE.slice(0, 7)}, ${SHA_TWO.slice(0, 7)}`,
+      },
+    ])
+  })
+
+  it('fails as vacuous when the documents carry no capture at all', () => {
+    expect(verdictOf(withCaptures([]))).toBe('FAIL')
+  })
+
+  it('skips an unborn repository, and fails it under --require-history', () => {
+    expect(verdictOf(withCaptures([reference()], null))).toBe('SKIP')
+    expect(verdictOf(withCaptures([reference()], null, true))).toBe('FAIL')
+  })
+
+  it('names every offending reference and leaves the compliant ones alone', () => {
+    const rule = withCaptures([
+      reference(),
+      reference({ path: 'AGENTS.md', line: 9, caption: '*A page.*' }),
+    ])
+    expect(violationsOf(rule).map((violation) => violation.where)).toEqual(['AGENTS.md line 9'])
+    const outcome = rule.check()
+    expect(outcome.status === 'fail' && outcome.subjects).toBe(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The collector, against real files under a temporary directory.
+ *
+ * What a pure test cannot cover is which documents are read and where a caption
+ * is found, and both are where the quiet mistake lives: a collector that walked
+ * the README alone would report the same three subjects this tree has today and
+ * go blind to the first picture a record adds.
+ */
+describe('the captures a repository carries', () => {
+  const CAPTURE = (name: string, alt = 'A page of the product.') =>
+    `![${alt}](docs/images/${name}.png)`
+
+  function repositoryWith(files: Record<string, string>): string {
+    const dir = newRepo()
+    for (const [path, text] of Object.entries(files)) {
+      mkdirSync(join(dir, dirname(path)), { recursive: true })
+      writeFileSync(join(dir, path), text, 'utf8')
+    }
+    return dir
+  }
+
+  it('reads a capture from the README, from AGENTS.md and from a record', () => {
+    const dir = repositoryWith({
+      'README.md': `# Title\n\n${CAPTURE('board')}\n\n*The board, captured at \`${SHA_ONE.slice(0, 7)}\`.*\n`,
+      'AGENTS.md': `# Working here\n\n${CAPTURE('guest')}\n\n*The guest's page, captured at \`${SHA_ONE.slice(0, 7)}\`.*\n`,
+      'docs/adr/0001-a-decision.md': `# 0001. A decision\n\n${CAPTURE('sign-in')}\n\n*The sign-in, captured at \`${SHA_ONE.slice(0, 7)}\`.*\n`,
+    })
+
+    expect(collectInput(dir, false).imageReferences.map((found) => found.path)).toEqual([
+      'README.md',
+      'AGENTS.md',
+      'docs/adr/0001-a-decision.md',
+    ])
+  })
+
+  // Five badges and one capture, which is the README's own shape. A collector
+  // keyed on anything but the target counts six and reddens on shields.io.
+  it('leaves an image on another origin out', () => {
+    const badges = [
+      '[![CI](https://example.test/badge.svg)](https://example.test/ci)',
+      '[![License](https://img.shields.io/badge/l-a-blue.svg)](LICENSE)',
+    ].join('\n')
+    const dir = repositoryWith({
+      'README.md': `# Title\n\n${badges}\n\n${CAPTURE('board')}\n\n*The board, captured at \`${SHA_ONE.slice(0, 7)}\`.*\n`,
+    })
+
+    const found = collectInput(dir, false).imageReferences
+    expect(found.map((reference) => reference.target)).toEqual(['docs/images/board.png'])
+  })
+
+  // The caption is split the way this repository's sign-in caption is split. A
+  // line-based reader takes the first physical line, which here holds no
+  // revision at all, and reports a violation against a caption that names one.
+  it('joins a caption a soft wrap has split', () => {
+    const dir = repositoryWith({
+      'README.md':
+        `# Title\n\n${CAPTURE('sign-in')}\n\n` +
+        `*The board's sign-in. What was typed into the password field is masked\n` +
+        `by the browser, and it was captured at \`${SHA_ONE.slice(0, 7)}\`.*\n`,
+    })
+
+    const [found] = collectInput(dir, false).imageReferences
+    expect(found?.caption).toContain(`captured at \`${SHA_ONE.slice(0, 7)}\`.`)
+    expect(found?.caption).not.toContain('\n')
+  })
+
+  it('reads no caption from a heading that merely follows a picture', () => {
+    const dir = repositoryWith({
+      'README.md': `# Title\n\n${CAPTURE('board')}\n\n## What happens next\n\nProse at \`${SHA_ONE.slice(0, 7)}\`.\n`,
+    })
+
+    expect(collectInput(dir, false).imageReferences[0]?.caption).toBe('')
+  })
+
+  it('reports the line the reference sits on', () => {
+    const dir = repositoryWith({
+      'README.md': `# Title\n\nSome prose.\n\n${CAPTURE('board')}\n\n*At \`${SHA_ONE.slice(0, 7)}\`.*\n`,
+    })
+
+    expect(collectInput(dir, false).imageReferences[0]?.line).toBe(5)
+  })
+
+  // null and an empty array are different answers, and only the first means
+  // there is no history to resolve against.
+  it('reads history as null while unborn and as shas once committed', () => {
+    const dir = repositoryWith({ 'README.md': '# Title\n' })
+    expect(collectInput(dir, false).historyRevisions).toBeNull()
+
+    commitAll(dir, 'a subject')
+    const revisions = collectInput(dir, false).historyRevisions
+    expect(revisions).toHaveLength(1)
+    expect(revisions?.[0]).toMatch(/^[0-9a-f]{40}$/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The census, over this repository rather than over a fixture.
+ *
+ * Sites are named rather than counted, so a fourth capture says which one it is
+ * instead of moving a number.
+ */
+describe('the captures this repository carries', () => {
+  it('finds three, at the three sites this tree carries', () => {
+    const references = collectInput(ROOT, false).imageReferences
+
+    expect(references.map((reference) => `${reference.path} ${reference.target}`)).toEqual([
+      'README.md docs/images/guest-page-order-placed.png',
+      'README.md docs/images/staff-sign-in.png',
+      'README.md docs/images/staff-board.png',
+    ])
+  })
+
+  it('resolves every caption it carries against its own history', () => {
+    expect(verdictOf(captureCaptionResolvesRule(collectInput(ROOT, true)))).toBe('PASS')
   })
 })

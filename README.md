@@ -8,7 +8,7 @@ Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.
 [![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
 
-**Status:** 2026-08-26 · a member of staff signs in on a page of their own,
+**Status:** 2026-08-27 · a member of staff signs in on a page of their own,
 reads every open order in their restaurant, records a round as paid for, and
 clears a ticket from the board when the kitchen has served it.
 
@@ -30,7 +30,7 @@ field is masked by the browser, and no value from it is in the picture.*
 
 ![The open-orders board on a wider screen: the heading, the name of whoever is signed in and the restaurant they work at beneath it, then a row per ticket with the table on the left and what was ordered beside it, oldest at the top.](docs/images/staff-board.png)
 
-*The board, captured at `a8f828f`.*
+*The board, captured at `0fe409d`.*
 
 ## What happens at the table
 
@@ -1014,18 +1014,21 @@ each with the alternatives that were rejected and why.
   word it does not carry. The records in `docs/adr/` are outside it on purpose:
   each states what was decided on its date, and a decision that moves is
   superseded rather than rewritten.
-- The board's picture was taken before either control existed and shows no way to
-  clear a ticket or to record a payment. Its caption names the revision it was taken at, which is what
-  makes it a record of that revision rather than a claim about this one; a
-  recapture made here could not be captioned honestly at all, because its pixels
-  would come from code with no revision until the commit exists.
-- The pictures at the top of this file are held by nothing executable. Each one
-  names the revision it was taken at, and no program compares a picture with the
-  page it shows, or a caption's revision with what that revision renders. The
-  check is buildable — a caption's revision resolves against history — so this is
-  a deferral rather than a limit: it lands with the first recapture, or with the
-  first image a later commit adds
+- A caption is held to its form and never to its pixels. `capture-caption-resolves`
+  reads every picture in this file, in `AGENTS.md` and in the records, and fails
+  one that carries no alt text, one whose caption names no revision, one that
+  names more than a single revision, and one whose revision resolves against no
+  commit or against several. What no program does is compare a picture with the
+  page it shows: a caption that names a real revision and shows something that
+  revision never rendered passes, and only a reader catches it
   ([ADR 0032](docs/adr/0032-show-both-pages-as-dated-captures.md)).
+- That rule reads this file, `AGENTS.md` and `docs/adr/*.md`, and nothing else. A
+  picture added to `CLAUDE.md` or under `.claude/skills/` is invisible to it, and
+  what widens the set is the first picture that appears there rather than a
+  prediction about one. It reads the records where `open-window-restated` may not,
+  because history only ever grows: a revision that resolves today resolves
+  forever, so a caption written on a record's own date does not go stale the way
+  a restated value does.
 - Nothing in this repository reproduces those pictures. They were taken by a
   script that was not committed, because it would be the only thing under
   `tools/` with no test beside it — what it emits is pixels nothing asserts on.
@@ -1252,7 +1255,7 @@ each with the alternatives that were rejected and why.
   input that produced the divergence in
   [ADR 0022](docs/adr/0022-take-a-checks-inputs-from-the-repository.md), not
   every way a check could learn something about its operator.
-- The convention checker carries eight rules. The rest arrive with the code they
+- The convention checker carries nine rules. The rest arrive with the code they
   govern, so that each rule shows up to a set of subjects that already comply.
 - `compose.yaml` carries development credentials inline, and starts a Redis
   that nothing connects to.

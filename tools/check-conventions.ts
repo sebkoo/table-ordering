@@ -102,6 +102,26 @@ export type WindowMention = {
   text: string
 }
 
+export type ImageReference = {
+  /** Repository-relative path of the document carrying it. */
+  path: string
+  /** 1-based line the reference sits on, which is the line a reader has to edit. */
+  line: number
+  /** The alt text, exactly as written between the brackets. */
+  alt: string
+  /** The target, exactly as written between the parentheses. */
+  target: string
+  /**
+   * The paragraph that follows it, with soft line wraps joined into one line.
+   *
+   * Joined here rather than in the rule for the reason `readWindowMentions`
+   * gives: the sign-in's caption is split across two physical lines, and a
+   * line-based reader finds two of the three revisions in this tree and
+   * reports no violations.
+   */
+  caption: string
+}
+
 export type ConventionInput = {
   /** Contents of README.md, or null when there is no README.md. */
   readme: string | null
@@ -196,6 +216,29 @@ export type ConventionInput = {
    * applies migrations and yields no list is the list gone quiet, and it is named.
    */
   migrationAppliers: string[]
+  /**
+   * Every commit's full sha, newest first, or null when the repository is
+   * unborn. The authority a caption's revision is resolved against.
+   *
+   * A collector of its own rather than a field on `Commit`, which carries what
+   * the message policy asks about and nothing else. Widening that type would
+   * ripple through every fixture built for a rule that never asks this
+   * question.
+   *
+   * null and [] mean what they mean for `commits`, and for the same reason.
+   */
+  historyRevisions: string[] | null
+  /**
+   * Every inline image in the documents that can carry a capture whose target
+   * names a path in this repository, in path then file order.
+   *
+   * A target on another origin is not collected. A badge is one and a capture
+   * never is: `AGENTS.md` defines a capture as "stored here rather than
+   * fetched from anywhere else", so the target is what tells the two apart.
+   * A picture of a page hosted remotely is invisible to this, which is this
+   * selector's limit and is recorded in ADR 0032 rather than hidden.
+   */
+  imageReferences: ImageReference[]
   /** Treat "no history to evaluate" as a failure rather than a skip. */
   requireHistory: boolean
 }
@@ -646,6 +689,96 @@ export function migrationListFullPrefixRule(input: ConventionInput): Rule {
   }
 }
 
+/**
+ * A picture in this repository's documents is a capture, and `AGENTS.md` says
+ * a capture is "captioned with the revision it was taken at". This is the
+ * program that holds that sentence.
+ *
+ * It holds the caption's form and never its pixels. No program compares a
+ * picture with the page it shows, which ADR 0032 says in the same place and for
+ * the same reason ADR 0029 says a test cannot see the difference between
+ * `timingSafeEqual` and `===`.
+ *
+ * The history branch comes first, and the order is load-bearing for the reason
+ * `readmeStatusDateRule` gives: only that branch converts under
+ * --require-history, so a rule that asked about the documents first would hide
+ * a missing history behind a verdict nothing can turn red.
+ */
+export function captureCaptionResolvesRule(input: ConventionInput): Rule {
+  return {
+    name: 'capture-caption-resolves',
+    expectsSubjects: true,
+    check(): Outcome {
+      const revisions = input.historyRevisions
+      if (revisions === null) {
+        const reason = 'the repository has no commits to resolve a caption against'
+        if (input.requireHistory) {
+          return {
+            status: 'fail',
+            subjects: 0,
+            violations: [{ where: 'history', detail: reason }],
+          }
+        }
+        return { status: 'skip', reason }
+      }
+
+      const violations: Violation[] = []
+
+      for (const reference of input.imageReferences) {
+        const where = `${reference.path} line ${reference.line}`
+
+        // Asked separately, and not as an else. A picture can be missing its
+        // alt text and its revision at once, and a reader repairing one wants
+        // to be told about the other in the same run.
+        if (reference.alt.trim() === '') {
+          violations.push({ where, detail: `carries no alt text: ${reference.target}` })
+        }
+
+        const named = [...reference.caption.matchAll(CAPTION_REVISION)].map(
+          (match) => match[1] ?? '',
+        )
+
+        if (named.length === 0) {
+          violations.push({ where, detail: `caption names no revision: ${reference.caption}` })
+          continue
+        }
+
+        // Exactly one, not at least one. A picture came from one revision, and
+        // a caption naming two dates nothing a reader can use -- which is the
+        // drift this rule exists for, arriving as an addition rather than as a
+        // replacement.
+        if (named.length > 1) {
+          violations.push({
+            where,
+            detail:
+              `caption names ${named.length} revisions, ` +
+              `and a picture came from one: ${named.join(', ')}`,
+          })
+          continue
+        }
+
+        const revision = named[0] ?? ''
+
+        // A prefix, never a containment. `8f828f7` occurs inside this tree's
+        // own `a8f828f795...` without being its prefix, and a containment test
+        // would call that resolved.
+        const matched = revisions.filter((sha) => sha.startsWith(revision))
+        if (matched.length !== 1) {
+          const against = matched.length === 0 ? 'no commit' : `${matched.length} commits`
+          violations.push({
+            where,
+            detail: `caption names ${revision}, which resolves against ${against}`,
+          })
+        }
+      }
+
+      const subjects = input.imageReferences.length
+      if (violations.length > 0) return { status: 'fail', subjects, violations }
+      return { status: 'pass', subjects }
+    },
+  }
+}
+
 export function createRules(input: ConventionInput): Rule[] {
   return [
     readmeStatusDateRule(input),
@@ -656,6 +789,7 @@ export function createRules(input: ConventionInput): Rule[] {
     runStepSingleTransactionRule(input),
     openWindowRestatedRule(input),
     migrationListFullPrefixRule(input),
+    captureCaptionResolvesRule(input),
   ]
 }
 
@@ -1069,6 +1203,126 @@ function readWindowMentions(root: string): WindowMention[] {
 }
 
 /**
+ * The documents that can carry a capture.
+ *
+ * README first, because that is where every capture is today. `AGENTS.md` and
+ * the records as well, because ADR 0032's trigger is "the first recapture, or
+ * the first image a later commit adds" -- a picture added to a record would
+ * otherwise never become a subject, and the deferral would have been spent on
+ * an event this rule cannot see.
+ *
+ * Reading `docs/adr/` here is not the thing `AGENTS.md` rules out for
+ * `open-window-restated`. That rule compares prose against a value that moves,
+ * so a record it read would go red for having been written on its own date.
+ * This one compares against history, which only ever grows: a revision that
+ * resolves today resolves forever. The check is monotone; the window's is not.
+ *
+ * A picture in a document outside this set is invisible, and what widens the
+ * set is the first one that appears there rather than a prediction about it.
+ */
+const CAPTURING_FILES = ['README.md', 'AGENTS.md'] as const
+const RECORD_SOURCE = ['docs', 'adr'] as const
+
+/** An inline image: the alt text, then the target. */
+const IMAGE_REFERENCE = /!\[([^\]]*)\]\(([^)\s]*)\)/g
+
+/**
+ * A target naming another origin. A badge carries a scheme; a capture never
+ * does, because a capture is stored here rather than fetched from anywhere
+ * else.
+ */
+const REMOTE_TARGET = /^[a-z][a-z0-9+.-]*:/i
+
+/**
+ * A revision as every caption in this tree writes one: inline code, hex, seven
+ * to forty characters.
+ *
+ * The backticks are load-bearing rather than decoration. README carries about
+ * thirty undelimited runs of seven or more hex characters -- the UUID fragments
+ * in its JSON examples -- and English supplies more, `defaced` and `effaced`
+ * being seven letters drawn entirely from a to f. Inside a caption the backtick
+ * is what declares that a token is a revision, and a rule that sniffed prose
+ * instead would report violations against words.
+ */
+const CAPTION_REVISION = /`([0-9a-f]{7,40})`/g
+
+/**
+ * The paragraph following an image reference, wraps joined.
+ *
+ * A heading or a second image ends the search rather than being read as prose:
+ * an image with nothing under it has no caption, and reporting the next section
+ * title as one would name the wrong line in the violation.
+ */
+function captionAfter(lines: readonly string[], start: number): string {
+  let index = start
+  while (index < lines.length && (lines[index] ?? '').trim() === '') index++
+
+  const paragraph: string[] = []
+  for (; index < lines.length; index++) {
+    const line = lines[index] ?? ''
+    if (line.trim() === '') break
+    if (line.startsWith('#') || line.includes('![')) return ''
+    paragraph.push(line.trim())
+  }
+
+  return paragraph.join(' ')
+}
+
+/**
+ * Every capture in the documents, in path then file order.
+ *
+ * The reference is matched against the whole file with its newlines still in
+ * it, and the line derived from the offset, which is how `readWindowMentions`
+ * reports a line it found the same way.
+ */
+function readImageReferences(root: string): ImageReference[] {
+  const references: ImageReference[] = []
+
+  const paths = [
+    ...CAPTURING_FILES,
+    ...names(join(root, ...RECORD_SOURCE), 'file')
+      .filter((file) => file.endsWith('.md'))
+      .map((file) => `${RECORD_SOURCE.join('/')}/${file}`),
+  ]
+
+  for (const path of paths) {
+    let text: string
+    try {
+      text = readFileSync(join(root, path), 'utf8')
+    } catch {
+      continue
+    }
+
+    const lines = text.split('\n')
+
+    for (const match of text.matchAll(IMAGE_REFERENCE)) {
+      const alt = match[1] ?? ''
+      const target = match[2] ?? ''
+      if (REMOTE_TARGET.test(target)) continue
+
+      const line = text.slice(0, match.index).split('\n').length
+      references.push({ path, line, alt, target, caption: captionAfter(lines, line) })
+    }
+  }
+
+  return references
+}
+
+/**
+ * Every commit's full sha, newest first, or null when the repository is unborn.
+ *
+ * Separate from `readCommits` because the two answer different questions and
+ * are asked under different conditions. The unborn state is decided by the
+ * caller, from git's own answer, never from a log that printed nothing.
+ */
+function readHistoryRevisions(root: string): string[] {
+  return (gitOrNull(root, ['log', '--format=%H']) ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+}
+
+/**
  * The migrations directory, named once, the way `WINDOW_SOURCE` names the file
  * that owns the window. A second service's migrations are outside this rule, and
  * that limit is recorded in ADR 0035 rather than guessed at here: the trigger for
@@ -1248,6 +1502,8 @@ export function collectInput(root: string, requireHistory: boolean): ConventionI
     migrationDirectory: readMigrationDirectory(root),
     migrationLists: suites.lists,
     migrationAppliers: suites.appliers,
+    historyRevisions: unborn ? null : readHistoryRevisions(root),
+    imageReferences: readImageReferences(root),
     requireHistory,
   }
 }
