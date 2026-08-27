@@ -1,16 +1,102 @@
 # Table-side ordering for restaurants
 
-Self-hosted table-side ordering for restaurants, built in the open under AGPL-3.0.
-
-[![CI](https://github.com/sebkoo/table-ordering/actions/workflows/ci.yml/badge.svg)](https://github.com/sebkoo/table-ordering/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-24-brightgreen.svg)](.nvmrc)
-[![TypeScript](https://img.shields.io/badge/typescript-strict-blue.svg)](tsconfig.base.json)
-[![pnpm](https://img.shields.io/badge/pnpm-workspaces-orange.svg)](pnpm-workspace.yaml)
+Self-hosted table-side ordering, built in the open under AGPL-3.0. A guest opens
+the code printed on their table, sees the menu, and sends a round to the kitchen
+from the page — no app to install, and no request to any origin but the one that
+served it.
 
 **Status:** 2026-08-27 · a member of staff signs in on a page of their own,
 reads every open order in their restaurant, records a round as paid for, and
 clears a ticket from the board when the kitchen has served it.
+
+[![CI](https://github.com/sebkoo/table-ordering/actions/workflows/ci.yml/badge.svg)](https://github.com/sebkoo/table-ordering/actions/workflows/ci.yml)
+
+![The Blue Door's menu on a guest's phone: the restaurant's name, the table's label beneath it, then each item with its price and a box for how many. Below the send button the page says the order is with the kitchen, and under that is what this table has already sent, each round with its quantity and no price beside it.](docs/images/guest-page-order-placed.png)
+
+*The guest's page, captured at `a8f828f`.*
+
+## Why
+
+Every table-ordering product I looked at wanted a percentage of card volume, a
+tablet on every table, or both — and most of what they were charging for was a
+menu on a screen. The menu is not the hard part. The hard part is making one
+guest's order survive a retry, a dropped signal, and a kitchen screen that
+somebody else is updating at the same moment. That is worth building carefully,
+and it is worth being able to run yourself.
+
+## Run it
+
+Requires Node 24 (see `.nvmrc`), pnpm, and Docker for PostgreSQL.
+
+```sh
+git clone https://github.com/sebkoo/table-ordering.git
+cd table-ordering
+pnpm install
+docker compose up -d
+```
+
+PostgreSQL is published on host port 55432 rather than 5432, so that it comes
+up beside whatever PostgreSQL you already run. If 55432 is taken, change it in
+`compose.yaml` and set `DATABASE_URL` to match.
+
+Create the schema. There is no migration runner yet, so this is `psql` reading
+each migration in turn, on a database that has had none of them —
+re-applying one raises `relation already exists`, and nothing is applied —
+the loud failure the absence of a runner rests on. `--single-transaction` is
+not optional: without it `psql` commits each statement as it goes, and a file
+that failed halfway would leave the half behind
+([ADR 0015](docs/adr/0015-apply-the-second-migration-by-hand.md)):
+
+```sh
+for m in services/api/migrations/*.up.sql; do
+  docker compose exec -T postgres \
+    psql -U table_ordering -d table_ordering --single-transaction < "$m"
+done
+```
+
+Give it a restaurant to serve, and a table to sit at. There is no admin route
+yet either. The code is the address the table's card will carry, so mint it
+rather than choose it — `openssl rand -hex 6` produced the one below — and do
+not name the table in it.
+
+The flag is not optional here either, and it buys more than it does above.
+`restaurant` and `restaurant_table` each carry a unique constraint that stops a
+second run; `menu_item` carries none. Without `--single-transaction` a repeated
+run therefore leaves the item behind on its own, duplicated, while the two
+inserts around it fail — and `psql` exits 0 having reported the failures on
+stderr and nothing about what it kept:
+
+```sh
+docker compose exec -T postgres \
+  psql -U table_ordering -d table_ordering --single-transaction <<'SQL'
+insert into restaurant (slug, name) values ('blue-door', 'The Blue Door');
+insert into menu_item (restaurant_id, name, price_minor, currency, sort_order)
+select id, 'Flat white', 300, 'GBP', 10 from restaurant where slug = 'blue-door';
+insert into restaurant_table (restaurant_id, code, label)
+select id, '9f3c1a7b20de', 'Table 7' from restaurant where slug = 'blue-door';
+SQL
+```
+
+Then start the API and ask it for that table's menu:
+
+```sh
+pnpm dev
+curl -s localhost:3000/tables/9f3c1a7b20de/menu
+```
+
+```json
+{"restaurant":{"slug":"blue-door","name":"The Blue Door"},"table":{"label":"Table 7"},"items":[{"id":"8f14e45f-ceea-467a-9f0b-2c2e0a3f7c31","name":"Flat white","priceMinor":300,"currency":"GBP"}]}
+```
+
+## What's here
+
+The roadmap below is complete — every row Done — and the depth is under it:
+what happens at the table, how a menu request and an order are served, the run
+steps in full, the decisions in [`docs/adr/`](docs/adr/), and the limitations,
+at length.
+
+A moving picture of the loop is produced by `tools/record-demo.ts`. The producer
+is in this tree; what it emits is not.
 
 ## What it looks like
 
@@ -18,10 +104,6 @@ The pages, and the loop between them: a guest sends a round from the table, a
 member of staff signs in, and the round is on the board. Each picture is a
 capture of the running product, and its caption names the revision it was taken
 at.
-
-![The Blue Door's menu on a guest's phone: the restaurant's name, the table's label beneath it, then each item with its price and a box for how many. Below the send button the page says the order is with the kitchen, and under that is what this table has already sent, each round with its quantity and no price beside it.](docs/images/guest-page-order-placed.png)
-
-*The guest's page, captured at `a8f828f`.*
 
 ![The board's sign-in on a wider screen: a field for an email address, a field for a password whose characters the browser has replaced with dots, and a button to sign in.](docs/images/staff-sign-in.png)
 
@@ -517,15 +599,6 @@ an order to another table, re-time it, or delete it. A statement naming any othe
 column is refused by the privilege before a policy is consulted — which is what
 makes the refusal hold for a statement nobody reviewed.
 
-## Why
-
-Every table-ordering product I looked at wanted a percentage of card volume, a
-tablet on every table, or both — and most of what they were charging for was a
-menu on a screen. The menu is not the hard part. The hard part is making one
-guest's order survive a retry, a dropped signal, and a kitchen screen that
-somebody else is updating at the same moment. That is worth building carefully,
-and it is worth being able to run yourself.
-
 ## Roadmap
 
 Every row is Done. That is a statement about this list and not about the
@@ -551,69 +624,10 @@ what each row bought is what the section above describes.
 | A kitchen board a ticket can be acted on from | Done |
 | Payment, as an option rather than a requirement | Done |
 
-## Run it
+## Run it in full
 
-Requires Node 24 (see `.nvmrc`), pnpm, and Docker for PostgreSQL.
-
-```sh
-git clone https://github.com/sebkoo/table-ordering.git
-cd table-ordering
-pnpm install
-docker compose up -d
-```
-
-PostgreSQL is published on host port 55432 rather than 5432, so that it comes
-up beside whatever PostgreSQL you already run. If 55432 is taken, change it in
-`compose.yaml` and set `DATABASE_URL` to match.
-
-Create the schema. There is no migration runner yet, so this is `psql` reading
-each migration in turn, on a database that has had none of them —
-re-applying one raises `relation already exists`, and nothing is applied —
-the loud failure the absence of a runner rests on. `--single-transaction` is
-not optional: without it `psql` commits each statement as it goes, and a file
-that failed halfway would leave the half behind
-([ADR 0015](docs/adr/0015-apply-the-second-migration-by-hand.md)):
-
-```sh
-for m in services/api/migrations/*.up.sql; do
-  docker compose exec -T postgres \
-    psql -U table_ordering -d table_ordering --single-transaction < "$m"
-done
-```
-
-Give it a restaurant to serve, and a table to sit at. There is no admin route
-yet either. The code is the address the table's card will carry, so mint it
-rather than choose it — `openssl rand -hex 6` produced the one below — and do
-not name the table in it.
-
-The flag is not optional here either, and it buys more than it does above.
-`restaurant` and `restaurant_table` each carry a unique constraint that stops a
-second run; `menu_item` carries none. Without `--single-transaction` a repeated
-run therefore leaves the item behind on its own, duplicated, while the two
-inserts around it fail — and `psql` exits 0 having reported the failures on
-stderr and nothing about what it kept:
-
-```sh
-docker compose exec -T postgres \
-  psql -U table_ordering -d table_ordering --single-transaction <<'SQL'
-insert into restaurant (slug, name) values ('blue-door', 'The Blue Door');
-insert into menu_item (restaurant_id, name, price_minor, currency, sort_order)
-select id, 'Flat white', 300, 'GBP', 10 from restaurant where slug = 'blue-door';
-insert into restaurant_table (restaurant_id, code, label)
-select id, '9f3c1a7b20de', 'Table 7' from restaurant where slug = 'blue-door';
-SQL
-```
-
-Then start the API and ask it for that table's menu:
-
-```sh
-pnpm dev
-curl -s localhost:3000/tables/9f3c1a7b20de/menu
-```
-
-```json
-{"restaurant":{"slug":"blue-door","name":"The Blue Door"},"table":{"label":"Table 7"},"items":[{"id":"8f14e45f-ceea-467a-9f0b-2c2e0a3f7c31","name":"Flat white","priceMinor":300,"currency":"GBP"}]}
-```
+The rest of the walkthrough: the role the API connects as, ordering and reading
+back with `curl`, a member of staff, the two pages, and what the checks do.
 
 The API connects as `table_ordering_app`, not as `table_ordering`. The migration
 above creates that role and grants it `usage` on the schema, which is why there
@@ -926,6 +940,7 @@ each with the alternatives that were rejected and why.
 - [0035 Check a suite's migration list against the directory, by two keys](docs/adr/0035-check-a-suites-migration-list-against-the-directory.md)
 - [0036 Record a round as paid, gate nothing on it, and leave the bill to the sitting](docs/adr/0036-record-a-round-as-paid-and-gate-nothing-on-it.md)
 - [0037 Produce the demo from a script in the tree, and publish it as a release asset](docs/adr/0037-produce-the-demo-from-a-script-in-the-tree.md)
+- [0038 Order the README for a reader who scans, and move nothing out of its collectors' sight](docs/adr/0038-order-the-readme-for-a-reader-who-scans.md)
 
 ## Known limitations
 
