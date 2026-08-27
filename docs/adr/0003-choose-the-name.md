@@ -42,3 +42,29 @@ project is ever commercialised.
   rename costs an afternoon while the repository has no dependents.
 - **Never brand; keep the category term as the product name.** A category term
   is not a product name. It cannot be defended, and it cannot be found.
+
+## Consequences
+
+The trigger above fired at `v0.1.0`, the first release, and was not met there.
+It is recorded rather than left as a sentence that came true and went
+unremarked.
+
+What the Decision says, verbatim: "A brand is chosen at the first release, when
+there is a releasable product to brand and the rename is still cheap."
+
+Two facts, stated as facts and not as an argument for the delay:
+
+- The three conditions the Decision sets — no live registered trademark in Nice
+  class 9, 35, 42 or 43; no active product in restaurant ordering, point of sale
+  or hospitality using the name; no active product in that category trading
+  under a near token — are the maintainer's judgments about live registers and
+  active products. No check in this repository reads any of them, and nothing in
+  the release procedure can settle them.
+- `table-ordering` describes what the software does, and that is true today. The
+  Context's assessment of what it costs is unchanged: discoverability, not legal
+  exposure.
+
+**The brand is chosen while the rename is still cheap — before `v1.0.0`, or
+before the repository first has stars, forks or dependents, whichever comes
+first.** That is the successor to the trigger above, and it is deliberately the
+Context's own measure of cheapness rather than a date.

@@ -1278,8 +1278,10 @@ each with the alternatives that were rejected and why.
 - `pnpm install` modifies git configuration in your clone, as described above.
 - AGPL-3.0 rules this out for some companies as a matter of policy. That is a
   deliberate trade, not an oversight.
-- The name is a description, not a brand, and it is expected to change at the
-  first release.
+- The name is a description, not a brand. The first release did not change it,
+  and the gate that now binds is in
+  [ADR 0003](docs/adr/0003-choose-the-name.md): before `v1.0.0`, or before this
+  repository has stars, forks or dependents.
 
 ## Non-goals
 
